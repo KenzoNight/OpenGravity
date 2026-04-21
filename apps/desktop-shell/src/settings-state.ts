@@ -54,6 +54,8 @@ const providerLabels: Record<ModelProvider, string> = {
 const defaultEnabledProviders = new Set<ModelProvider>(["anthropic", "gemini", "openai"]);
 
 const defaultBaseUrls: Partial<Record<ModelProvider, string>> = {
+  gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
+  openai: "https://api.openai.com/v1",
   openrouter: "https://openrouter.ai/api/v1",
   ollama: "http://127.0.0.1:11434/v1",
   custom: "https://api.example.com/v1"

@@ -28,6 +28,7 @@ Current shell prototype includes:
 - workbench-style window chrome, explorer, editor column, and agent dock
 - setup-required state when no provider is configured
 - provider settings overlay for BYOK, active model selection, fallback controls, and multi-account pools
+- Gemini AI Studio keys through the Gemini OpenAI-compatible route
 - desktop-safe local persistence for prototype settings
 - workspace file loading and saving through Tauri commands
 - external file drag-and-drop with open and save support
@@ -38,4 +39,5 @@ Current shell prototype includes:
 - workflow execution tracking for recommended build and repair plans
 - Ask, Planning, and Agent chat modes with mode-safe restrictions
 - OpenAI-compatible chat routing for OpenRouter and custom endpoints
+- workbench menu actions plus a customize-layout dialog
 - user-defined local skills for launching external tools

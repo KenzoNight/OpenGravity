@@ -132,13 +132,23 @@ declare global {
 type SideView = "overview" | "handoff" | "artifacts" | "runtime";
 type BottomView = "build" | "tasks" | "events" | "log" | "terminal";
 type SettingsView = "providers" | "skills";
+type MenuId = "file" | "edit" | "selection" | "view" | "go" | "run" | "terminal" | "help";
 
 interface ExplorerGroup {
   label: string;
   entries: string[];
 }
 
-const menuItems = ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"];
+const menuItems: Array<{ id: MenuId; label: string }> = [
+  { id: "file", label: "File" },
+  { id: "edit", label: "Edit" },
+  { id: "selection", label: "Selection" },
+  { id: "view", label: "View" },
+  { id: "go", label: "Go" },
+  { id: "run", label: "Run" },
+  { id: "terminal", label: "Terminal" },
+  { id: "help", label: "Help" }
+];
 
 const activityItems = [
   { id: "EX", label: "Explorer", active: true },
@@ -206,7 +216,7 @@ function normalizePathSlashes(path: string): string {
 }
 
 function isCompatibleChatProvider(provider: ModelProvider): boolean {
-  return provider === "openrouter" || provider === "openai" || provider === "custom";
+  return provider === "gemini" || provider === "openrouter" || provider === "openai" || provider === "custom";
 }
 
 async function loadShellHealth(): Promise<ShellHealth> {
@@ -297,11 +307,15 @@ export default function App() {
   const [openDocuments, setOpenDocuments] = useState<WorkspaceDocument[]>([
     createWorkspaceDocument(browserFallbackWorkspace.activeFilePath, browserFallbackWorkspace.activeFileContent)
   ]);
+  const [openMenuId, setOpenMenuId] = useState<MenuId | null>(null);
   const [sideView, setSideView] = useState<SideView>("overview");
   const [bottomView, setBottomView] = useState<BottomView>("terminal");
   const [bottomOpen, setBottomOpen] = useState(true);
+  const [activityBarOpen, setActivityBarOpen] = useState(true);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [dockOpen, setDockOpen] = useState(true);
+  const [statusBarOpen, setStatusBarOpen] = useState(true);
+  const [layoutOpen, setLayoutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsView, setSettingsView] = useState<SettingsView>("providers");
   const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("anthropic");
@@ -398,6 +412,27 @@ export default function App() {
       setSelectedProvider(settings.providerProfiles[0]?.provider ?? "anthropic");
     }
   }, [selectedProvider, settings.providerProfiles]);
+
+  useEffect(() => {
+    if (!openMenuId) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        setOpenMenuId(null);
+        return;
+      }
+
+      if (!target.closest(".menu-item-shell")) {
+        setOpenMenuId(null);
+      }
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [openMenuId]);
 
   useEffect(() => {
     const primaryAccount = getPrimaryProviderAccount(settings, selectedProvider);
@@ -509,6 +544,7 @@ export default function App() {
   const workflowProgress = workflowRun ? getWorkflowProgress(workflowRun) : null;
   const workbenchClassName = [
     "workbench",
+    !activityBarOpen && "is-activity-collapsed",
     !explorerOpen && "is-explorer-collapsed",
     !dockOpen && "is-dock-collapsed"
   ]
@@ -570,6 +606,12 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void handleSaveFile();
+        return;
+      }
+
+      if (event.key === "Escape") {
+        setOpenMenuId(null);
+        setLayoutOpen(false);
       }
     };
 
@@ -1053,6 +1095,211 @@ export default function App() {
     }
   };
 
+  const renderMenuDropdown = () => {
+    if (!openMenuId) {
+      return null;
+    }
+
+    interface MenuEntry {
+      label: string;
+      shortcut?: string;
+      checked?: boolean;
+      disabled?: boolean;
+      onSelect: () => void;
+    }
+
+    const runAction = (action: () => void) => {
+      action();
+      setOpenMenuId(null);
+    };
+
+    const menuEntries: MenuEntry[] = (() => {
+      switch (openMenuId) {
+        case "file":
+          return [
+            {
+              label: saveBusy ? "Save current file..." : "Save current file",
+              shortcut: "Ctrl+S",
+              disabled: !activeFilePath,
+              onSelect: () => void handleSaveFile()
+            },
+            {
+              label: "Reload current file",
+              disabled: !activeFilePath,
+              onSelect: () => void handleReloadFile()
+            },
+            {
+              label: "Provider settings",
+              shortcut: "Ctrl+,",
+              onSelect: () => setSettingsOpen(true)
+            }
+          ];
+        case "edit":
+          return [
+            {
+              label: "Focus editor",
+              onSelect: () => setWorkspaceNotice(`Focused ${labelForFilePath(activeFilePath || "editor")}.`)
+            },
+            {
+              label: "Open active file in explorer",
+              disabled: !activeFilePath,
+              onSelect: () => {
+                setExplorerOpen(true);
+                setWorkspaceNotice(`Revealed ${labelForFilePath(activeFilePath)} in Explorer.`);
+              }
+            }
+          ];
+        case "selection":
+          return [
+            {
+              label: "Focus explorer",
+              onSelect: () => {
+                setExplorerOpen(true);
+                setWorkspaceNotice("Explorer is visible.");
+              }
+            },
+            {
+              label: "Focus terminal",
+              onSelect: () => {
+                setBottomView("terminal");
+                setBottomOpen(true);
+              }
+            },
+            {
+              label: "Focus agent",
+              onSelect: () => setDockOpen(true)
+            }
+          ];
+        case "view":
+          return [
+            {
+              label: "Activity bar",
+              checked: activityBarOpen,
+              onSelect: () => setActivityBarOpen((value) => !value)
+            },
+            {
+              label: "Primary side bar",
+              checked: explorerOpen,
+              onSelect: () => setExplorerOpen((value) => !value)
+            },
+            {
+              label: "Secondary side bar",
+              checked: dockOpen,
+              onSelect: () => setDockOpen((value) => !value)
+            },
+            {
+              label: "Panel",
+              checked: bottomOpen,
+              onSelect: () => setBottomOpen((value) => !value)
+            },
+            {
+              label: "Status bar",
+              checked: statusBarOpen,
+              onSelect: () => setStatusBarOpen((value) => !value)
+            },
+            {
+              label: "Customize layout...",
+              onSelect: () => setLayoutOpen(true)
+            }
+          ];
+        case "go":
+          return [
+            {
+              label: "README",
+              onSelect: () => void handleSelectFile("README.md")
+            },
+            {
+              label: "Desktop shell",
+              onSelect: () => void handleSelectFile("apps/desktop-shell/src/App.tsx")
+            },
+            {
+              label: "Rust bridge",
+              onSelect: () => void handleSelectFile("apps/desktop-shell/src-tauri/src/main.rs")
+            }
+          ];
+        case "run":
+          return [
+            {
+              label: "Run suggested plan",
+              disabled: snapshot.setupRequired || terminalBusy || workflowDispatchBusy,
+              onSelect: () => handleStartWorkflow()
+            },
+            {
+              label: "Reset workflow",
+              disabled: terminalBusy,
+              onSelect: () => handleResetWorkflow()
+            },
+            {
+              label: commandPresets[0]?.label ?? "Run workspace command",
+              disabled: !commandPresets[0] || terminalBusy,
+              onSelect: () => {
+                const preset = commandPresets[0];
+                if (preset) {
+                  void runPreset(preset);
+                }
+              }
+            }
+          ];
+        case "terminal":
+          return [
+            {
+              label: "Open terminal",
+              onSelect: () => {
+                setBottomView("terminal");
+                setBottomOpen(true);
+              }
+            },
+            {
+              label: "Reuse selected command",
+              disabled: !selectedTerminalSession,
+              onSelect: () => {
+                if (selectedTerminalSession) {
+                  setTerminalInput(selectedTerminalSession.command);
+                }
+              }
+            },
+            {
+              label: "Cancel active command",
+              disabled: !activeTerminalRunId,
+              onSelect: () => void handleCancelActiveCommand()
+            }
+          ];
+        case "help":
+          return [
+            {
+              label: "Architecture notes",
+              onSelect: () => void handleSelectFile("docs/opengravity-v1-architecture.md")
+            },
+            {
+              label: "Master plan",
+              onSelect: () => void handleSelectFile("docs/master-plan.md")
+            },
+            {
+              label: "Provider settings",
+              onSelect: () => setSettingsOpen(true)
+            }
+          ];
+      }
+    })();
+
+    return (
+      <div className="menu-dropdown" role="menu">
+        {menuEntries.map((entry) => (
+          <button
+            className={`menu-dropdown-item ${entry.checked ? "is-checked" : ""}`}
+            disabled={entry.disabled}
+            key={entry.label}
+            onClick={() => runAction(entry.onSelect)}
+            type="button"
+          >
+            <span>{entry.label}</span>
+            {entry.shortcut ? <span className="menu-shortcut">{entry.shortcut}</span> : null}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   const renderBottomContent = () => {
     switch (bottomView) {
       case "build":
@@ -1375,9 +1622,16 @@ export default function App() {
       <div className="menu-strip">
         <nav className="menu-items">
           {menuItems.map((item) => (
-            <button className="menu-item" key={item} type="button">
-              {item}
-            </button>
+            <div className="menu-item-shell" key={item.id}>
+              <button
+                className={`menu-item ${openMenuId === item.id ? "is-active" : ""}`}
+                onClick={() => setOpenMenuId((current) => (current === item.id ? null : item.id))}
+                type="button"
+              >
+                {item.label}
+              </button>
+              {openMenuId === item.id ? renderMenuDropdown() : null}
+            </div>
           ))}
         </nav>
 
@@ -1421,18 +1675,20 @@ export default function App() {
       </div>
 
       <div className={workbenchClassName}>
-        <aside className="activity-rail">
-          {activityItems.map((item) => (
-            <button
-              className={`activity-button ${item.active ? "is-active" : ""}`}
-              key={item.id}
-              type="button"
-              title={item.label}
-            >
-              <span>{item.id}</span>
-            </button>
-          ))}
-        </aside>
+        {activityBarOpen ? (
+          <aside className="activity-rail">
+            {activityItems.map((item) => (
+              <button
+                className={`activity-button ${item.active ? "is-active" : ""}`}
+                key={item.id}
+                type="button"
+                title={item.label}
+              >
+                <span>{item.id}</span>
+              </button>
+            ))}
+          </aside>
+        ) : null}
 
         <aside className="pane explorer-pane">
           <div className="pane-header">
@@ -1771,13 +2027,94 @@ export default function App() {
         </aside>
       </div>
 
-      <footer className="statusbar">
-        <span>{workspace.rootPath}</span>
-        <span>{activeFilePath || "No file selected"}</span>
-        <span>{activeDocumentLanguageLabel}</span>
-        <span>{dirtyDocumentCount > 0 ? `${dirtyDocumentCount} dirty buffers` : "All buffers saved"}</span>
-        <span>{readyProviders.length} providers ready</span>
-      </footer>
+      {statusBarOpen ? (
+        <footer className="statusbar">
+          <span>{workspace.rootPath}</span>
+          <span>{activeFilePath || "No file selected"}</span>
+          <span>{activeDocumentLanguageLabel}</span>
+          <span>{dirtyDocumentCount > 0 ? `${dirtyDocumentCount} dirty buffers` : "All buffers saved"}</span>
+          <span>{readyProviders.length} providers ready</span>
+        </footer>
+      ) : null}
+
+      {layoutOpen ? (
+        <div className="settings-scrim" onClick={() => setLayoutOpen(false)} role="presentation">
+          <section
+            aria-label="Customize Layout"
+            className="layout-panel"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-header">
+              <div>
+                <div className="settings-title">Customize Layout</div>
+                <div className="settings-subtitle">Choose which desktop surfaces stay visible while you work.</div>
+              </div>
+              <button className="secondary-button" onClick={() => setLayoutOpen(false)} type="button">
+                Close
+              </button>
+            </div>
+
+            <div className="layout-panel-body">
+              <label className="toggle-row">
+                <input
+                  checked={activityBarOpen}
+                  onChange={(event) => setActivityBarOpen(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Activity Bar</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  checked={explorerOpen}
+                  onChange={(event) => setExplorerOpen(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Primary Side Bar</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  checked={dockOpen}
+                  onChange={(event) => setDockOpen(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Secondary Side Bar</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  checked={bottomOpen}
+                  onChange={(event) => setBottomOpen(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Panel</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  checked={statusBarOpen}
+                  onChange={(event) => setStatusBarOpen(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Status Bar</span>
+              </label>
+
+              <div className="layout-panel-actions">
+                <button
+                  className="secondary-button slim-button"
+                  onClick={() => {
+                    setActivityBarOpen(true);
+                    setExplorerOpen(true);
+                    setDockOpen(true);
+                    setBottomOpen(true);
+                    setStatusBarOpen(true);
+                  }}
+                  type="button"
+                >
+                  Reset to default
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {settingsOpen && selectedProfile ? (
         <div className="settings-scrim" onClick={() => setSettingsOpen(false)} role="presentation">
@@ -2130,8 +2467,12 @@ export default function App() {
                             placeholder={
                               selectedProfile.provider === "ollama"
                                 ? "http://127.0.0.1:11434/v1"
+                                : selectedProfile.provider === "gemini"
+                                  ? "https://generativelanguage.googleapis.com/v1beta/openai"
                                 : selectedProfile.provider === "openrouter"
                                   ? "https://openrouter.ai/api/v1"
+                                  : selectedProfile.provider === "openai"
+                                    ? "https://api.openai.com/v1"
                                   : "https://api.example.com/v1"
                             }
                             value={selectedAccount.baseUrl}
@@ -2140,7 +2481,7 @@ export default function App() {
                             {selectedProfile.provider === "anthropic" ||
                             selectedProfile.provider === "gemini" ||
                             selectedProfile.provider === "openai"
-                              ? "Leave this blank unless you are using a proxy or OpenAI-compatible endpoint."
+                              ? "The default endpoint is prefilled. Change it only if you are using a proxy or compatible endpoint."
                               : "Required for OpenRouter, local runtimes, and compatible endpoints."}
                           </div>
                         </div>

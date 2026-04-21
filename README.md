@@ -50,9 +50,11 @@ Current status:
 - core continuity, routing, orchestration, and build-intelligence packages are testable
 - desktop shell includes a real Tauri workspace file bridge and command bridge
 - provider settings now support multi-account BYOK routing for the same provider
+- Gemini AI Studio keys now work through the desktop shell's OpenAI-compatible Gemini route
 - recommended execution plans can now run step-by-step from the desktop shell with tracked workflow state
 - Ask, Planning, and Agent chat modes now exist with mode-safe behavior
 - external file drag-and-drop and user-defined local skill launching now exist in the desktop shell
+- desktop workbench menus and customize-layout controls now exist as part of the shell
 - production-ready secret storage, richer agent execution, and deeper terminal/runtime integration are still in progress
 
 ## For Developers

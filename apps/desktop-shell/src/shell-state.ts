@@ -110,6 +110,15 @@ export const desktopShellModels: ModelDescriptor[] = [
     maxContextWindow: 200000
   },
   {
+    id: "gemini-2.5-flash",
+    label: "Gemini 2.5 Flash",
+    provider: "gemini",
+    qualityTier: "balanced",
+    costTier: "low",
+    supportsTools: true,
+    maxContextWindow: 1048576
+  },
+  {
     id: "gemini-2.5-pro",
     label: "Gemini 2.5 Pro",
     provider: "gemini",
