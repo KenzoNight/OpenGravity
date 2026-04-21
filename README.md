@@ -49,9 +49,11 @@ Current status:
 - early alpha repository
 - core continuity, routing, orchestration, and build-intelligence packages are testable
 - desktop shell includes a real Tauri workspace file bridge and command bridge
-- provider settings and BYOK routing controls now exist as an early desktop shell prototype
+- provider settings now support multi-account BYOK routing for the same provider
 - recommended execution plans can now run step-by-step from the desktop shell with tracked workflow state
-- production-ready editing, terminal integration, secure secret storage, and command execution are still in progress
+- Ask, Planning, and Agent chat modes now exist with mode-safe behavior
+- external file drag-and-drop and user-defined local skill launching now exist in the desktop shell
+- production-ready secret storage, richer agent execution, and deeper terminal/runtime integration are still in progress
 
 ## For Developers
 
@@ -128,21 +130,24 @@ Already implemented:
 - task graph orchestration
 - session ledger persistence
 - an early native desktop shell
-- an early provider settings and API key management surface
+- a multi-account provider settings surface for BYOK routing
 - workspace file reading and saving through Tauri commands
+- external file reading and saving for drag-and-drop workflows
 - desktop command execution with a guarded allowlist
 - streaming command sessions with cancel support
 - workflow execution queues for recommended build and repair steps
 - Monaco-backed code editing with language-aware file models
 - xterm-based terminal sessions with live command output and run switching
 - live OpenRouter catalog discovery with current free-model filtering
+- mode-safe chat for Ask, Planning, and Agent flows
+- OpenAI-compatible chat routing for OpenRouter and custom endpoints
+- user-defined local skills for launching external tools such as reverse engineering utilities
 
 Not finished yet:
 
-- Monaco editor integration
 - rich terminal emulation with PTY-grade interaction
 - native secret vault for provider credentials
-- multi-tab document state and conflict handling
+- automatic agent execution loops driven by live model responses
 - full agent manager workflows
 
 ## Documentation

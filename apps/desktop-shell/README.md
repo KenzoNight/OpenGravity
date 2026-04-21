@@ -27,11 +27,15 @@ Current shell prototype includes:
 
 - workbench-style window chrome, explorer, editor column, and agent dock
 - setup-required state when no provider is configured
-- provider settings overlay for BYOK, active model selection, and fallback controls
+- provider settings overlay for BYOK, active model selection, fallback controls, and multi-account pools
 - desktop-safe local persistence for prototype settings
 - workspace file loading and saving through Tauri commands
+- external file drag-and-drop with open and save support
 - Monaco editor integration with file-aware language detection
 - guarded workspace command execution inside the native shell
 - xterm-based streaming command sessions with cancel support
 - live OpenRouter catalog discovery with free-model selection
 - workflow execution tracking for recommended build and repair plans
+- Ask, Planning, and Agent chat modes with mode-safe restrictions
+- OpenAI-compatible chat routing for OpenRouter and custom endpoints
+- user-defined local skills for launching external tools

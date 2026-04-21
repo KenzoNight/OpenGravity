@@ -635,6 +635,11 @@ button {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.secondary-button.is-active {
+  background: rgba(83, 210, 246, 0.12);
+  border-color: #3a647c;
+}
+
 .slim-button {
   min-height: 28px;
   padding: 0 12px;
@@ -659,6 +664,77 @@ button {
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.02);
   color: #d9e4ee;
+}
+
+.composer-input {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+
+.chat-mode-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-mode-tab {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.chat-mode-tab.is-active {
+  color: var(--text);
+  border-color: #3a647c;
+  background: rgba(83, 210, 246, 0.1);
+}
+
+.chat-history {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  margin: 12px 0;
+  overflow: auto;
+}
+
+.chat-message {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.chat-message.is-user {
+  background: rgba(83, 210, 246, 0.08);
+  border-color: #2f566e;
+}
+
+.chat-message.is-assistant {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.chat-message.is-system {
+  background: rgba(240, 200, 106, 0.08);
+}
+
+.chat-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.chat-message-body {
+  white-space: pre-wrap;
+  font-size: 0.78rem;
+  line-height: 1.55;
 }
 
 .composer-actions {
@@ -760,6 +836,14 @@ button {
   background: #101820;
 }
 
+.settings-header-actions,
+.settings-view-toggle,
+.settings-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .settings-layout {
   min-height: 0;
   display: grid;
@@ -815,7 +899,24 @@ button {
   font: inherit;
 }
 
+.settings-textarea {
+  width: 100%;
+  min-height: 110px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
 .settings-input:focus {
+  outline: 1px solid rgba(83, 210, 246, 0.4);
+  border-color: #3b6178;
+}
+
+.settings-textarea:focus {
   outline: 1px solid rgba(83, 210, 246, 0.4);
   border-color: #3b6178;
 }
@@ -870,6 +971,15 @@ button {
   color: var(--muted);
   font-size: 0.76rem;
   line-height: 1.4;
+}
+
+.settings-empty-state {
+  padding: 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .settings-section-headline {

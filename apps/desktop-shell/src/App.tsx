@@ -18,35 +18,66 @@ import {
 import {
   browserFallbackWorkspace,
   cancelWorkspaceCommand,
+  launchSkillProcess,
   loadWorkspaceSnapshot,
+  readExternalFile,
   listenToWorkspaceCommands,
   readWorkspaceFile,
   runWorkspaceCommand,
   startWorkspaceCommand,
+  writeExternalFile,
   writeWorkspaceFile,
   type WorkspaceSnapshotPayload
 } from "./native-bridge";
 import {
+  addProviderAccount,
   createDefaultWorkbenchSettings,
   getAvailableModelIds,
   getModelsForProvider,
+  getPrimaryProviderAccount,
+  getProviderAccounts,
   getProviderConnectionLabel,
   getProviderConnectionState,
+  getReadyProviderAccounts,
   isProviderReady,
   maskSecret,
   normalizeWorkbenchSettings,
+  removeProviderAccount,
   serializeWorkbenchSettings,
   setActiveModel,
+  setPrimaryProviderAccount,
   settingsStorageKey,
+  updateProviderAccount,
   updateProviderProfile,
+  type ProviderAccount,
   type ProviderProfile,
   type WorkbenchSettings
 } from "./settings-state";
+import {
+  buildProviderChatMessages,
+  canRunAgentWorkflow,
+  createChatMessage,
+  getChatComposerPlaceholder,
+  getChatModeDescription,
+  type ChatMessage,
+  type ChatMode
+} from "./chat-state";
 import {
   fetchOpenRouterCatalog,
   mergeModelCatalog,
   type ProviderCatalogSnapshot
 } from "./provider-catalog";
+import { sendCompatibleChatCompletion } from "./openrouter-chat";
+import {
+  addLocalSkill,
+  normalizeLocalSkills,
+  parseSkillArguments,
+  removeLocalSkill,
+  serializeLocalSkills,
+  skillsStorageKey,
+  updateLocalSkill,
+  type LocalSkill
+} from "./skills-state";
 import {
   browserFallbackHealth,
   buildDesktopShellSnapshot,
@@ -100,6 +131,7 @@ declare global {
 
 type SideView = "overview" | "handoff" | "artifacts" | "runtime";
 type BottomView = "build" | "tasks" | "events" | "log" | "terminal";
+type SettingsView = "providers" | "skills";
 
 interface ExplorerGroup {
   label: string;
@@ -148,6 +180,35 @@ function loadWorkbenchSettings(): WorkbenchSettings {
   }
 }
 
+function loadLocalSkills(): LocalSkill[] {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return [];
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(skillsStorageKey);
+    if (!rawValue) {
+      return [];
+    }
+
+    return normalizeLocalSkills(JSON.parse(rawValue));
+  } catch {
+    return [];
+  }
+}
+
+function isExternalDocumentPath(path: string): boolean {
+  return /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\") || path.startsWith("/");
+}
+
+function normalizePathSlashes(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function isCompatibleChatProvider(provider: ModelProvider): boolean {
+  return provider === "openrouter" || provider === "openai" || provider === "custom";
+}
+
 async function loadShellHealth(): Promise<ShellHealth> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -185,8 +246,8 @@ const providerTone = (state: ProviderHealthState): string => {
   }
 };
 
-const connectionTone = (profile: ProviderProfile): string => {
-  switch (getProviderConnectionState(profile)) {
+const connectionTone = (profile: ProviderProfile, settings: WorkbenchSettings): string => {
+  switch (getProviderConnectionState(profile, settings)) {
     case "ready":
       return "is-done";
     case "missing-base-url":
@@ -242,8 +303,12 @@ export default function App() {
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [dockOpen, setDockOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsView, setSettingsView] = useState<SettingsView>("providers");
   const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("anthropic");
-  const [visibleSecrets, setVisibleSecrets] = useState<Partial<Record<ModelProvider, boolean>>>({});
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+  const [selectedSkillId, setSelectedSkillId] = useState<string>("");
+  const [skills, setSkills] = useState<LocalSkill[]>(() => loadLocalSkills());
+  const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [activeTerminalRunId, setActiveTerminalRunId] = useState<string | null>(null);
@@ -253,6 +318,15 @@ export default function App() {
   const [openRouterCatalog, setOpenRouterCatalog] = useState<ProviderCatalogSnapshot | null>(null);
   const [providerCatalogBusy, setProviderCatalogBusy] = useState<ModelProvider | null>(null);
   const [providerCatalogError, setProviderCatalogError] = useState<string | null>(null);
+  const [chatMode, setChatMode] = useState<ChatMode>("ask");
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    createChatMessage(
+      "system",
+      "OpenGravity chat is ready. Connect a provider, choose a mode, and start with Ask, Planning, or Agent."
+    )
+  ]);
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowDispatchBusy, setWorkflowDispatchBusy] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
@@ -312,15 +386,53 @@ export default function App() {
   }, [settings]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+
+    window.localStorage.setItem(skillsStorageKey, serializeLocalSkills(skills));
+  }, [skills]);
+
+  useEffect(() => {
     if (!settings.providerProfiles.some((profile) => profile.provider === selectedProvider)) {
       setSelectedProvider(settings.providerProfiles[0]?.provider ?? "anthropic");
     }
   }, [selectedProvider, settings.providerProfiles]);
 
-  const modelCatalog = useMemo(
-    () => mergeModelCatalog(desktopShellModels, openRouterCatalog?.models ?? []),
-    [openRouterCatalog]
-  );
+  useEffect(() => {
+    const primaryAccount = getPrimaryProviderAccount(settings, selectedProvider);
+    const selectedProviderAccounts = getProviderAccounts(settings, selectedProvider);
+
+    if (!selectedProviderAccounts.some((account) => account.id === selectedAccountId)) {
+      setSelectedAccountId(primaryAccount?.id ?? selectedProviderAccounts[0]?.id ?? "");
+    }
+  }, [selectedAccountId, selectedProvider, settings]);
+
+  useEffect(() => {
+    if (!skills.some((skill) => skill.id === selectedSkillId)) {
+      setSelectedSkillId(skills[0]?.id ?? "");
+    }
+  }, [selectedSkillId, skills]);
+
+  const modelCatalog = useMemo(() => {
+    const merged = mergeModelCatalog(desktopShellModels, openRouterCatalog?.models ?? []);
+    const customProfile = settings.providerProfiles.find((profile) => profile.provider === "custom");
+    const customModelId = customProfile?.preferredModelId.trim() ?? "";
+
+    if (customModelId && !merged.some((model) => model.id === customModelId)) {
+      merged.push({
+        id: customModelId,
+        label: customModelId,
+        provider: "custom",
+        qualityTier: "balanced",
+        costTier: "medium",
+        supportsTools: true,
+        maxContextWindow: 128000
+      });
+    }
+
+    return merged;
+  }, [openRouterCatalog, settings.providerProfiles]);
   const snapshot = useMemo(
     () => buildDesktopShellSnapshot(shellHealth, settings, modelCatalog),
     [modelCatalog, shellHealth, settings]
@@ -342,11 +454,23 @@ export default function App() {
     [availableModelIds, settings.activeModelId, snapshot.models]
   );
   const readyProviders = useMemo(
-    () => settings.providerProfiles.filter((profile) => isProviderReady(profile)),
-    [settings.providerProfiles]
+    () => settings.providerProfiles.filter((profile) => isProviderReady(profile, settings)),
+    [settings]
   );
   const selectedProfile = settings.providerProfiles.find((profile) => profile.provider === selectedProvider) ?? settings.providerProfiles[0];
   const selectedProviderModels = selectedProfile ? getModelsForProvider(snapshot.models, selectedProfile.provider) : [];
+  const selectedProviderAccounts = selectedProfile ? getProviderAccounts(settings, selectedProfile.provider) : [];
+  const selectedPrimaryAccount = selectedProfile
+    ? getPrimaryProviderAccount(settings, selectedProfile.provider)
+    : undefined;
+  const selectedReadyAccounts = selectedProfile
+    ? getReadyProviderAccounts(settings, selectedProfile.provider)
+    : [];
+  const selectedAccount =
+    selectedProviderAccounts.find((account) => account.id === selectedAccountId) ??
+    selectedPrimaryAccount ??
+    selectedProviderAccounts[0];
+  const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
   const selectedProviderCatalogBusy = providerCatalogBusy === selectedProfile?.provider;
   const selectedProviderSupportsCatalog = selectedProfile?.provider === "openrouter";
   const openRouterFreeModels = useMemo(
@@ -356,7 +480,20 @@ export default function App() {
   const recentEvents = snapshot.sessionRecord.events.slice(-6).reverse();
   const recentArtifacts = snapshot.sessionRecord.artifacts.slice(-4).reverse();
   const runningTask = snapshot.tasks.find((task) => task.status === "running");
-  const activeModelLabel = activeLiveModel?.label ?? "Setup required";
+  const activeModelLabel = activeLiveModel?.label ?? settings.activeModelId ?? "Setup required";
+  const activeChatProfile = activeLiveModel
+    ? settings.providerProfiles.find((profile) => profile.provider === activeLiveModel.provider)
+    : undefined;
+  const chatProfile =
+    activeChatProfile && isCompatibleChatProvider(activeChatProfile.provider)
+      ? activeChatProfile
+      : selectedProfile;
+  const chatAccounts = chatProfile ? getReadyProviderAccounts(settings, chatProfile.provider) : [];
+  const chatModelId =
+    chatProfile && activeLiveModel && chatProfile.provider === activeLiveModel.provider
+      ? activeLiveModel.id
+      : chatProfile?.preferredModelId ?? "";
+  const chatProviderLabel = chatProfile?.label ?? "Provider";
   const activeDocument = getWorkspaceDocument(openDocuments, activeFilePath);
   const activeDocumentLanguage = detectEditorLanguage(activeFilePath);
   const activeDocumentLanguageLabel = formatEditorLanguageLabel(activeDocumentLanguage);
@@ -440,11 +577,67 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.__TAURI__) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten = () => {};
+
+    void import("@tauri-apps/api/webview").then(async ({ getCurrentWebview }) => {
+      if (disposed) {
+        return;
+      }
+
+      unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type !== "drop") {
+          return;
+        }
+
+        const workspaceRoot = normalizePathSlashes(workspace.rootPath).replace(/\/+$/, "").toLowerCase();
+        void (async () => {
+          for (const droppedPath of payload.paths) {
+            const normalizedDroppedPath = normalizePathSlashes(droppedPath);
+            const loweredPath = normalizedDroppedPath.toLowerCase();
+
+            if (workspaceRoot && loweredPath.startsWith(`${workspaceRoot}/`)) {
+              await loadActiveFile(normalizedDroppedPath.slice(workspaceRoot.length + 1));
+              continue;
+            }
+
+            try {
+              const file = await readExternalFile(droppedPath);
+              startTransition(() => {
+                setActiveFilePath(file.path);
+                setOpenDocuments((current) =>
+                  upsertWorkspaceDocument(current, createWorkspaceDocument(file.path, file.content))
+                );
+                setWorkspaceNotice(`Opened dropped file ${labelForFilePath(file.path)}`);
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : `Failed to open ${droppedPath}`;
+              startTransition(() => setWorkspaceNotice(message));
+            }
+          }
+        })();
+      });
+    });
+
+    return () => {
+      disposed = true;
+      unlisten();
+    };
+  }, [workspace.rootPath]);
+
   const loadActiveFile = async (relativePath: string) => {
     setWorkspaceBusy(true);
 
     try {
-      const file = await readWorkspaceFile(relativePath);
+      const file = isExternalDocumentPath(relativePath)
+        ? await readExternalFile(relativePath)
+        : await readWorkspaceFile(relativePath);
       startTransition(() => {
         setActiveFilePath(file.path);
         setOpenDocuments((current) =>
@@ -480,7 +673,9 @@ export default function App() {
 
     try {
       const content = activeDocument?.currentContent ?? "";
-      const saved = await writeWorkspaceFile(activeFilePath, content);
+      const saved = isExternalDocumentPath(activeFilePath)
+        ? await writeExternalFile(activeFilePath, content)
+        : await writeWorkspaceFile(activeFilePath, content);
       startTransition(() => {
         setOpenDocuments((current) => markWorkspaceDocumentSaved(current, saved.path, saved.content));
         setWorkspaceNotice(`Saved ${saved.path}`);
@@ -498,7 +693,9 @@ export default function App() {
     setWorkspaceBusy(true);
 
     try {
-      const file = await readWorkspaceFile(activeFilePath);
+      const file = isExternalDocumentPath(activeFilePath)
+        ? await readExternalFile(activeFilePath)
+        : await readWorkspaceFile(activeFilePath);
       startTransition(() => {
         setOpenDocuments((current) =>
           upsertWorkspaceDocument(current, createWorkspaceDocument(file.path, file.content))
@@ -595,8 +792,12 @@ export default function App() {
   };
 
   const handleDiscoverOpenRouterModels = async () => {
-    const openRouterProfile = settings.providerProfiles.find((profile) => profile.provider === "openrouter");
-    if (!openRouterProfile) {
+    const openRouterAccount = selectedProfile?.provider === "openrouter"
+      ? selectedAccount ?? getPrimaryProviderAccount(settings, "openrouter")
+      : getPrimaryProviderAccount(settings, "openrouter");
+
+    if (!openRouterAccount) {
+      setProviderCatalogError("Add an OpenRouter account before refreshing the catalog.");
       return;
     }
 
@@ -604,7 +805,7 @@ export default function App() {
     setProviderCatalogError(null);
 
     try {
-      const catalog = await fetchOpenRouterCatalog(openRouterProfile.apiKey, openRouterProfile.baseUrl);
+      const catalog = await fetchOpenRouterCatalog(openRouterAccount.apiKey, openRouterAccount.baseUrl);
       startTransition(() => {
         setOpenRouterCatalog(catalog);
         setWorkspaceNotice(`Loaded ${catalog.models.length} OpenRouter models (${catalog.freeCount} free).`);
@@ -628,6 +829,142 @@ export default function App() {
     }
 
     setSettings((current) => updateProviderProfile(current, selectedProfile.provider, patch, snapshot.models));
+  };
+
+  const updateSelectedAccount = (
+    patch: Partial<Omit<ProviderAccount, "id" | "provider">>
+  ) => {
+    if (!selectedAccount) {
+      return;
+    }
+
+    setSettings((current) => updateProviderAccount(current, selectedAccount.id, patch, snapshot.models));
+  };
+
+  const handleAddProviderAccount = () => {
+    if (!selectedProfile) {
+      return;
+    }
+
+    setSettings((current) => addProviderAccount(current, selectedProfile.provider));
+    setWorkspaceNotice(`Added another ${selectedProfile.label} account.`);
+  };
+
+  const handleRemoveSelectedAccount = () => {
+    if (!selectedProfile || !selectedAccount || selectedProviderAccounts.length <= 1) {
+      return;
+    }
+
+    setSettings((current) => removeProviderAccount(current, selectedAccount.id, snapshot.models));
+    setWorkspaceNotice(`Removed ${selectedAccount.label}.`);
+  };
+
+  const handleSetPrimaryAccount = () => {
+    if (!selectedProfile || !selectedAccount) {
+      return;
+    }
+
+    setSettings((current) =>
+      setPrimaryProviderAccount(current, selectedProfile.provider, selectedAccount.id, snapshot.models)
+    );
+    setWorkspaceNotice(`${selectedAccount.label} is now the primary ${selectedProfile.label} account.`);
+  };
+
+  const handleLaunchSkill = async () => {
+    if (!selectedSkill) {
+      return;
+    }
+
+    try {
+      await launchSkillProcess({
+        executablePath: selectedSkill.executablePath,
+        arguments: parseSkillArguments(selectedSkill),
+        workingDirectory: selectedSkill.workingDirectory || undefined
+      });
+      setWorkspaceNotice(`Launched ${selectedSkill.label}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Failed to launch ${selectedSkill.label}.`;
+      setWorkspaceNotice(message);
+    }
+  };
+
+  const handleSendChat = async () => {
+    const prompt = chatInput.trim();
+    if (!prompt || chatBusy) {
+      return;
+    }
+
+    const userMessage = createChatMessage("user", prompt);
+    setChatBusy(true);
+    setChatInput("");
+    setChatMessages((current) => [...current, userMessage]);
+
+    if (!chatProfile) {
+      setChatBusy(false);
+      setChatMessages((current) => [
+        ...current,
+        createChatMessage("assistant", "Connect a provider before sending chat requests.")
+      ]);
+      return;
+    }
+
+    if (!chatModelId.trim()) {
+      setChatBusy(false);
+      setChatMessages((current) => [
+        ...current,
+        createChatMessage("assistant", `${chatProviderLabel} does not have a preferred model configured yet.`)
+      ]);
+      return;
+    }
+
+    if (chatAccounts.length === 0) {
+      setChatBusy(false);
+      setChatMessages((current) => [
+        ...current,
+        createChatMessage(
+          "assistant",
+          `${chatProviderLabel} is not ready. Add at least one enabled account with a valid API key and base URL.`
+        )
+      ]);
+      return;
+    }
+
+    try {
+      const response = await sendCompatibleChatCompletion({
+        accounts: chatAccounts,
+        messages: buildProviderChatMessages(
+          chatMode,
+          snapshot,
+          activeFilePath,
+          activeDocument?.currentContent ?? "",
+          chatMessages,
+          prompt
+        ),
+        mode: chatMode,
+        modelId: chatModelId,
+        provider: chatProfile.provider,
+        sessionId: snapshot.sessionId
+      });
+
+      startTransition(() => {
+        setChatMessages((current) => [
+          ...current,
+          createChatMessage("assistant", response.content, {
+            accountLabel: response.accountLabel,
+            modelId: response.modelId
+          })
+        ]);
+        setWorkspaceNotice(`Chat response received from ${response.accountLabel}.`);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Chat request failed.";
+      startTransition(() => {
+        setChatMessages((current) => [...current, createChatMessage("assistant", message)]);
+        setWorkspaceNotice(message);
+      });
+    } finally {
+      setChatBusy(false);
+    }
   };
 
   const renderSideView = () => {
@@ -1308,25 +1645,61 @@ export default function App() {
             <section className="section-block">
               <div className="composer-card">
                 <div className="composer-top">
-                  <strong>OpenGravity</strong>
-                  <span className={`state-pill ${taskTone(runningTask?.status ?? "queued")}`}>
-                    {runningTask?.status ?? "queued"}
+                  <strong>OpenGravity Chat</strong>
+                  <span className={`state-pill ${chatBusy ? "is-running" : taskTone(runningTask?.status ?? "queued")}`}>
+                    {chatBusy ? "thinking" : chatMode}
                   </span>
                 </div>
-                <p className="composer-summary">{snapshot.handoffPlan.continuityPack.currentGoal}</p>
-                <div className="composer-input">
-                  {snapshot.setupRequired
-                    ? "Connect a provider, choose the active model, and resume the same session without resetting context."
-                    : "Continue the compile-repair loop, compact context, or switch models without leaving the active session."}
+
+                <div className="chat-mode-tabs">
+                  {(["ask", "planning", "agent"] as ChatMode[]).map((mode) => (
+                    <button
+                      className={`chat-mode-tab ${chatMode === mode ? "is-active" : ""}`}
+                      key={mode}
+                      onClick={() => setChatMode(mode)}
+                      type="button"
+                    >
+                      {mode === "ask" ? "Ask" : mode === "planning" ? "Planning" : "Agent"}
+                    </button>
+                  ))}
                 </div>
+
+                <p className="composer-summary">{getChatModeDescription(chatMode)}</p>
+
+                <div className="chat-history">
+                  {chatMessages.map((message) => (
+                    <div className={`chat-message is-${message.role}`} key={message.id}>
+                      <div className="chat-message-meta">
+                        <strong>{message.role === "user" ? "You" : message.role === "assistant" ? "OpenGravity" : "System"}</strong>
+                        <span>
+                          {new Date(message.timestamp).toLocaleTimeString("en-US", {
+                            hour: "2-digit",
+                            minute: "2-digit"
+                          })}
+                        </span>
+                        {message.accountLabel ? <span>{message.accountLabel}</span> : null}
+                        {message.modelId ? <span>{message.modelId}</span> : null}
+                      </div>
+                      <div className="chat-message-body">{message.content}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <textarea
+                  className="composer-input"
+                  onChange={(event) => setChatInput(event.target.value)}
+                  placeholder={getChatComposerPlaceholder(chatMode)}
+                  value={chatInput}
+                />
+
                 <div className="composer-actions">
                   <button
                     className="primary-button slim-button"
-                    disabled={snapshot.setupRequired || terminalBusy || workflowDispatchBusy}
-                    onClick={() => handleStartWorkflow()}
+                    disabled={chatBusy || chatInput.trim().length === 0}
+                    onClick={() => void handleSendChat()}
                     type="button"
                   >
-                    Run suggested plan
+                    {chatBusy ? "Sending..." : "Send"}
                   </button>
                   <button
                     className="secondary-button slim-button"
@@ -1338,11 +1711,24 @@ export default function App() {
                   >
                     Open terminal
                   </button>
+                  <button
+                    className="secondary-button slim-button"
+                    disabled={
+                      snapshot.setupRequired ||
+                      terminalBusy ||
+                      workflowDispatchBusy ||
+                      !canRunAgentWorkflow(chatMode)
+                    }
+                    onClick={() => handleStartWorkflow()}
+                    type="button"
+                  >
+                    Run suggested plan
+                  </button>
                 </div>
                 <div className="composer-footer">
-                  <span>{settings.autoHandoff ? "Auto handoff on" : "Auto handoff off"}</span>
-                  <span>{activeModelLabel}</span>
-                  <span>{readyProviders.length} providers ready</span>
+                  <span>{chatProviderLabel}</span>
+                  <span>{chatModelId || "No model configured"}</span>
+                  <span>{chatAccounts.length} chat accounts ready</span>
                 </div>
               </div>
             </section>
@@ -1405,244 +1791,562 @@ export default function App() {
                 <div className="settings-title">Provider Settings</div>
                 <div className="settings-subtitle">Use your own API keys, local runtimes, and fallback rules.</div>
               </div>
-              <button className="secondary-button" onClick={() => setSettingsOpen(false)} type="button">
-                Close
-              </button>
+              <div className="settings-header-actions">
+                <div className="settings-view-toggle">
+                  <button
+                    className={`secondary-button slim-button ${settingsView === "providers" ? "is-active" : ""}`}
+                    onClick={() => setSettingsView("providers")}
+                    type="button"
+                  >
+                    Providers
+                  </button>
+                  <button
+                    className={`secondary-button slim-button ${settingsView === "skills" ? "is-active" : ""}`}
+                    onClick={() => setSettingsView("skills")}
+                    type="button"
+                  >
+                    Skills
+                  </button>
+                </div>
+                <button className="secondary-button" onClick={() => setSettingsOpen(false)} type="button">
+                  Close
+                </button>
+              </div>
             </div>
 
             <div className="settings-layout">
               <aside className="settings-sidebar">
-                <section className="settings-section">
-                  <div className="settings-section-label">Workspace routing</div>
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor="active-model">
-                      Active model
-                    </label>
-                    <select
-                      id="active-model"
-                      className="settings-input"
-                      disabled={availableModelIds.size === 0}
-                      onChange={(event) =>
-                        setSettings((current) => setActiveModel(current, event.target.value, snapshot.models))
-                      }
-                      value={availableModelIds.has(settings.activeModelId) ? settings.activeModelId : ""}
-                    >
-                      {availableModelIds.size === 0 ? <option value="">Connect a provider first</option> : null}
-                      {snapshot.models
-                        .filter((model) => availableModelIds.has(model.id))
-                        .map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {model.label}
-                          </option>
+                {settingsView === "providers" ? (
+                  <>
+                    <section className="settings-section">
+                      <div className="settings-section-label">Workspace routing</div>
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor="active-model">
+                          Active model
+                        </label>
+                        <select
+                          id="active-model"
+                          className="settings-input"
+                          disabled={availableModelIds.size === 0}
+                          onChange={(event) =>
+                            setSettings((current) => setActiveModel(current, event.target.value, snapshot.models))
+                          }
+                          value={availableModelIds.has(settings.activeModelId) ? settings.activeModelId : ""}
+                        >
+                          {availableModelIds.size === 0 ? <option value="">Connect a provider first</option> : null}
+                          {snapshot.models
+                            .filter((model) => availableModelIds.has(model.id))
+                            .map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {model.label}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+
+                      <label className="toggle-row">
+                        <input
+                          checked={settings.autoHandoff}
+                          onChange={(event) =>
+                            setSettings((current) => ({
+                              ...current,
+                              autoHandoff: event.target.checked
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        <span>Allow automatic provider handoff</span>
+                      </label>
+                    </section>
+
+                    <section className="settings-section">
+                      <div className="settings-section-label">Providers</div>
+                      <div className="provider-list">
+                        {settings.providerProfiles.map((profile) => (
+                          <button
+                            className={`provider-list-item ${profile.provider === selectedProvider ? "is-active" : ""}`}
+                            key={profile.provider}
+                            onClick={() => setSelectedProvider(profile.provider)}
+                            type="button"
+                          >
+                            <div className="provider-list-copy">
+                              <strong>{profile.label}</strong>
+                              <span>{getProviderConnectionLabel(profile, settings)}</span>
+                            </div>
+                            <span className={`state-pill ${connectionTone(profile, settings)}`}>
+                              {getProviderConnectionState(profile, settings).replaceAll("-", " ")}
+                            </span>
+                          </button>
                         ))}
-                    </select>
-                  </div>
-
-                  <label className="toggle-row">
-                    <input
-                      checked={settings.autoHandoff}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          autoHandoff: event.target.checked
-                        }))
-                      }
-                      type="checkbox"
-                    />
-                    <span>Allow automatic provider handoff</span>
-                  </label>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-label">Providers</div>
-                  <div className="provider-list">
-                    {settings.providerProfiles.map((profile) => (
+                      </div>
+                    </section>
+                  </>
+                ) : (
+                  <section className="settings-section">
+                    <div className="settings-section-headline">
+                      <div>
+                        <div className="settings-provider-title">Local Skills</div>
+                        <div className="settings-provider-copy">
+                          Register external tools without hardcoding them into the app.
+                        </div>
+                      </div>
                       <button
-                        className={`provider-list-item ${profile.provider === selectedProvider ? "is-active" : ""}`}
-                        key={profile.provider}
-                        onClick={() => setSelectedProvider(profile.provider)}
+                        className="secondary-button slim-button"
+                        onClick={() => setSkills((current) => addLocalSkill(current))}
                         type="button"
                       >
-                        <div className="provider-list-copy">
-                          <strong>{profile.label}</strong>
-                          <span>{getProviderConnectionLabel(profile)}</span>
-                        </div>
-                        <span className={`state-pill ${connectionTone(profile)}`}>
-                          {getProviderConnectionState(profile).replaceAll("-", " ")}
-                        </span>
+                        Add skill
                       </button>
-                    ))}
-                  </div>
-                </section>
+                    </div>
+
+                    <div className="provider-list">
+                      {skills.length === 0 ? (
+                        <div className="settings-empty-state">
+                          Add tools such as Ghidra, x64dbg, or any custom local utility.
+                        </div>
+                      ) : (
+                        skills.map((skill) => (
+                          <button
+                            className={`provider-list-item ${skill.id === selectedSkillId ? "is-active" : ""}`}
+                            key={skill.id}
+                            onClick={() => setSelectedSkillId(skill.id)}
+                            type="button"
+                          >
+                            <div className="provider-list-copy">
+                              <strong>{skill.label}</strong>
+                              <span>{skill.executablePath || "Executable path not set"}</span>
+                            </div>
+                            <span className={`state-pill ${skill.enabled ? "is-done" : "is-waiting"}`}>
+                              {skill.enabled ? "enabled" : "disabled"}
+                            </span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </section>
+                )}
               </aside>
 
               <div className="settings-detail">
-                <section className="settings-section">
-                  <div className="settings-section-headline">
-                    <div>
-                      <div className="settings-provider-title">{selectedProfile.label}</div>
-                      <div className="settings-provider-copy">{getProviderConnectionLabel(selectedProfile)}</div>
-                    </div>
-                    <span className={`state-pill ${connectionTone(selectedProfile)}`}>
-                      {getProviderConnectionState(selectedProfile).replaceAll("-", " ")}
-                    </span>
-                  </div>
-
-                  <label className="toggle-row">
-                    <input
-                      checked={selectedProfile.enabled}
-                      onChange={(event) => updateSelectedProvider({ enabled: event.target.checked })}
-                      type="checkbox"
-                    />
-                    <span>Enable this provider</span>
-                  </label>
-
-                  <div className="settings-grid-two">
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor={`provider-model-${selectedProfile.provider}`}>
-                        Preferred model
-                      </label>
-                      <select
-                        id={`provider-model-${selectedProfile.provider}`}
-                        className="settings-input"
-                        onChange={(event) => updateSelectedProvider({ preferredModelId: event.target.value })}
-                        value={selectedProfile.preferredModelId}
-                      >
-                        {selectedProviderModels.map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {model.label}
-                          </option>
-                        ))}
-                      </select>
+                {settingsView === "providers" ? (
+                  <section className="settings-section">
+                    <div className="settings-section-headline">
+                      <div>
+                        <div className="settings-provider-title">{selectedProfile.label}</div>
+                        <div className="settings-provider-copy">
+                          {getProviderConnectionLabel(selectedProfile, settings)}
+                        </div>
+                      </div>
+                      <span className={`state-pill ${connectionTone(selectedProfile, settings)}`}>
+                        {getProviderConnectionState(selectedProfile, settings).replaceAll("-", " ")}
+                      </span>
                     </div>
 
-                    <label className="toggle-row compact-toggle">
+                    <label className="toggle-row">
                       <input
-                        checked={selectedProfile.allowFallback}
-                        onChange={(event) => updateSelectedProvider({ allowFallback: event.target.checked })}
+                        checked={selectedProfile.enabled}
+                        onChange={(event) => updateSelectedProvider({ enabled: event.target.checked })}
                         type="checkbox"
                       />
-                      <span>Allow fallback routing</span>
+                      <span>Enable this provider</span>
                     </label>
-                  </div>
 
-                  {selectedProviderSupportsCatalog ? (
+                    <div className="settings-grid-two">
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor={`provider-model-${selectedProfile.provider}`}>
+                          Preferred model
+                        </label>
+                        {selectedProfile.provider === "custom" ? (
+                          <input
+                            id={`provider-model-${selectedProfile.provider}`}
+                            className="settings-input"
+                            onChange={(event) => updateSelectedProvider({ preferredModelId: event.target.value })}
+                            placeholder="Enter any OpenAI-compatible model id"
+                            value={selectedProfile.preferredModelId}
+                          />
+                        ) : (
+                          <select
+                            id={`provider-model-${selectedProfile.provider}`}
+                            className="settings-input"
+                            onChange={(event) => updateSelectedProvider({ preferredModelId: event.target.value })}
+                            value={selectedProfile.preferredModelId}
+                          >
+                            {selectedProviderModels.map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {model.label}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+
+                      <label className="toggle-row compact-toggle">
+                        <input
+                          checked={selectedProfile.allowFallback}
+                          onChange={(event) => updateSelectedProvider({ allowFallback: event.target.checked })}
+                          type="checkbox"
+                        />
+                        <span>Allow fallback routing</span>
+                      </label>
+                    </div>
+
                     <div className="settings-section catalog-section">
                       <div className="settings-section-headline">
                         <div>
-                          <div className="settings-provider-title">OpenRouter Catalog</div>
+                          <div className="settings-provider-title">Accounts</div>
                           <div className="settings-provider-copy">
-                            Discover live models from the OpenRouter `/models` endpoint and surface current free options.
+                            Add multiple keys for the same provider and let OpenGravity rotate across them.
                           </div>
                         </div>
-                        <button
-                          className="secondary-button"
-                          disabled={selectedProviderCatalogBusy}
-                          onClick={() => void handleDiscoverOpenRouterModels()}
-                          type="button"
-                        >
-                          {selectedProviderCatalogBusy ? "Refreshing..." : "Refresh Catalog"}
+                        <button className="secondary-button" onClick={() => handleAddProviderAccount()} type="button">
+                          Add account
                         </button>
                       </div>
 
-                      <div className="catalog-summary-row">
-                        <span className="state-pill accent">
-                          {openRouterCatalog ? `${openRouterCatalog.models.length} models` : "No live catalog yet"}
-                        </span>
-                        <span className="state-pill is-done">
-                          {openRouterCatalog ? `${openRouterCatalog.freeCount} free` : "Refresh to list free models"}
-                        </span>
-                      </div>
-
-                      {providerCatalogError ? <div className="workflow-warning">{providerCatalogError}</div> : null}
-
-                      {openRouterCatalog ? (
-                        <div className="catalog-list">
-                          {openRouterFreeModels.map((model) => (
+                      <div className="provider-list">
+                        {selectedProviderAccounts.map((account) => {
+                          const ready = selectedReadyAccounts.some((entry) => entry.id === account.id);
+                          const primary = selectedProfile.primaryAccountId === account.id;
+                          return (
                             <button
-                              className={`catalog-list-item ${
-                                selectedProfile.preferredModelId === model.id ? "is-active" : ""
-                              }`}
-                              key={model.id}
-                              onClick={() => updateSelectedProvider({ preferredModelId: model.id })}
+                              className={`provider-list-item ${account.id === selectedAccount?.id ? "is-active" : ""}`}
+                              key={account.id}
+                              onClick={() => setSelectedAccountId(account.id)}
                               type="button"
                             >
-                              <div className="catalog-list-copy">
-                                <strong>{model.label}</strong>
-                                <span>{model.id}</span>
+                              <div className="provider-list-copy">
+                                <strong>{account.label}</strong>
+                                <span>
+                                  {primary ? "Primary account" : "Secondary account"}
+                                  {account.baseUrl ? ` · ${account.baseUrl}` : ""}
+                                </span>
                               </div>
-                              <div className="catalog-list-tags">
-                                <span className="signal-pill">{`${Math.round(model.maxContextWindow / 1024)}k context`}</span>
-                                <span className="state-pill is-done">free</span>
-                              </div>
+                              <span className={`state-pill ${ready ? "is-done" : "is-waiting"}`}>
+                                {ready ? "ready" : account.enabled ? "incomplete" : "disabled"}
+                              </span>
                             </button>
-                          ))}
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {selectedAccount ? (
+                      <div className="settings-section catalog-section">
+                        <div className="settings-section-headline">
+                          <div>
+                            <div className="settings-provider-title">{selectedAccount.label}</div>
+                            <div className="settings-provider-copy">
+                              {selectedProfile.primaryAccountId === selectedAccount.id
+                                ? "This account is the current primary route."
+                                : "This account can be used as a fallback or promoted to primary."}
+                            </div>
+                          </div>
+                          <div className="settings-inline-actions">
+                            <button
+                              className="secondary-button slim-button"
+                              disabled={selectedProfile.primaryAccountId === selectedAccount.id}
+                              onClick={() => handleSetPrimaryAccount()}
+                              type="button"
+                            >
+                              Make primary
+                            </button>
+                            <button
+                              className="secondary-button slim-button"
+                              disabled={selectedProviderAccounts.length <= 1}
+                              onClick={() => handleRemoveSelectedAccount()}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </div>
-                      ) : null}
-                    </div>
-                  ) : null}
 
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor={`provider-key-${selectedProfile.provider}`}>
-                      {selectedProfile.provider === "ollama" ? "Runtime token" : "API key"}
-                    </label>
-                    <div className="secret-row">
-                      <input
-                        id={`provider-key-${selectedProfile.provider}`}
-                        className="settings-input"
-                        onChange={(event) => updateSelectedProvider({ apiKey: event.target.value })}
-                        placeholder={
-                          selectedProfile.provider === "ollama"
-                            ? "Optional for authenticated local runtimes"
-                            : `Paste your ${selectedProfile.label} API key`
-                        }
-                        type={visibleSecrets[selectedProfile.provider] ? "text" : "password"}
-                        value={selectedProfile.apiKey}
-                      />
-                      <button
-                        className="secondary-button"
-                        onClick={() =>
-                          setVisibleSecrets((current) => ({
-                            ...current,
-                            [selectedProfile.provider]: !current[selectedProfile.provider]
-                          }))
-                        }
-                        type="button"
-                      >
-                        {visibleSecrets[selectedProfile.provider] ? "Hide" : "Show"}
-                      </button>
-                    </div>
-                    <div className="field-help">
-                      {selectedProfile.apiKey
-                        ? `Stored locally for this prototype: ${maskSecret(selectedProfile.apiKey)}`
-                        : "No key stored yet."}
-                    </div>
-                  </div>
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`provider-account-label-${selectedAccount.id}`}>
+                            Account label
+                          </label>
+                          <input
+                            id={`provider-account-label-${selectedAccount.id}`}
+                            className="settings-input"
+                            onChange={(event) => updateSelectedAccount({ label: event.target.value })}
+                            value={selectedAccount.label}
+                          />
+                        </div>
 
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor={`provider-url-${selectedProfile.provider}`}>
-                      Base URL
-                    </label>
-                    <input
-                      id={`provider-url-${selectedProfile.provider}`}
-                      className="settings-input"
-                      onChange={(event) => updateSelectedProvider({ baseUrl: event.target.value })}
-                      placeholder={
-                        selectedProfile.provider === "ollama"
-                          ? "http://127.0.0.1:11434/v1"
-                          : "https://api.example.com/v1"
-                      }
-                      value={selectedProfile.baseUrl}
-                    />
-                    <div className="field-help">
-                      {selectedProfile.provider === "anthropic" ||
-                      selectedProfile.provider === "gemini" ||
-                      selectedProfile.provider === "openai"
-                        ? "Leave this blank unless you are using a proxy or compatible endpoint."
-                        : "Required for OpenRouter, local runtimes, and compatible endpoints."}
+                        <label className="toggle-row">
+                          <input
+                            checked={selectedAccount.enabled}
+                            onChange={(event) => updateSelectedAccount({ enabled: event.target.checked })}
+                            type="checkbox"
+                          />
+                          <span>Enable this account</span>
+                        </label>
+
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`provider-key-${selectedAccount.id}`}>
+                            {selectedProfile.provider === "ollama" ? "Runtime token" : "API key"}
+                          </label>
+                          <div className="secret-row">
+                            <input
+                              id={`provider-key-${selectedAccount.id}`}
+                              className="settings-input"
+                              onChange={(event) => updateSelectedAccount({ apiKey: event.target.value })}
+                              placeholder={
+                                selectedProfile.provider === "ollama"
+                                  ? "Optional for authenticated local runtimes"
+                                  : `Paste the ${selectedProfile.label} API key for this account`
+                              }
+                              type={visibleSecrets[selectedAccount.id] ? "text" : "password"}
+                              value={selectedAccount.apiKey}
+                            />
+                            <button
+                              className="secondary-button"
+                              onClick={() =>
+                                setVisibleSecrets((current) => ({
+                                  ...current,
+                                  [selectedAccount.id]: !current[selectedAccount.id]
+                                }))
+                              }
+                              type="button"
+                            >
+                              {visibleSecrets[selectedAccount.id] ? "Hide" : "Show"}
+                            </button>
+                          </div>
+                          <div className="field-help">
+                            {selectedAccount.apiKey
+                              ? `Stored locally for this prototype: ${maskSecret(selectedAccount.apiKey)}`
+                              : "No key stored yet."}
+                          </div>
+                        </div>
+
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`provider-url-${selectedAccount.id}`}>
+                            Base URL
+                          </label>
+                          <input
+                            id={`provider-url-${selectedAccount.id}`}
+                            className="settings-input"
+                            onChange={(event) => updateSelectedAccount({ baseUrl: event.target.value })}
+                            placeholder={
+                              selectedProfile.provider === "ollama"
+                                ? "http://127.0.0.1:11434/v1"
+                                : selectedProfile.provider === "openrouter"
+                                  ? "https://openrouter.ai/api/v1"
+                                  : "https://api.example.com/v1"
+                            }
+                            value={selectedAccount.baseUrl}
+                          />
+                          <div className="field-help">
+                            {selectedProfile.provider === "anthropic" ||
+                            selectedProfile.provider === "gemini" ||
+                            selectedProfile.provider === "openai"
+                              ? "Leave this blank unless you are using a proxy or OpenAI-compatible endpoint."
+                              : "Required for OpenRouter, local runtimes, and compatible endpoints."}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedProviderSupportsCatalog ? (
+                      <div className="settings-section catalog-section">
+                        <div className="settings-section-headline">
+                          <div>
+                            <div className="settings-provider-title">OpenRouter Catalog</div>
+                            <div className="settings-provider-copy">
+                              Discover live models from the OpenRouter `/models` endpoint and surface current free options.
+                            </div>
+                          </div>
+                          <button
+                            className="secondary-button"
+                            disabled={selectedProviderCatalogBusy}
+                            onClick={() => void handleDiscoverOpenRouterModels()}
+                            type="button"
+                          >
+                            {selectedProviderCatalogBusy ? "Refreshing..." : "Refresh Catalog"}
+                          </button>
+                        </div>
+
+                        <div className="catalog-summary-row">
+                          <span className="state-pill accent">
+                            {openRouterCatalog ? `${openRouterCatalog.models.length} models` : "No live catalog yet"}
+                          </span>
+                          <span className="state-pill is-done">
+                            {openRouterCatalog ? `${openRouterCatalog.freeCount} free` : "Refresh to list free models"}
+                          </span>
+                        </div>
+
+                        {providerCatalogError ? <div className="workflow-warning">{providerCatalogError}</div> : null}
+
+                        {openRouterCatalog ? (
+                          <div className="catalog-list">
+                            {openRouterFreeModels.map((model) => (
+                              <button
+                                className={`catalog-list-item ${
+                                  selectedProfile.preferredModelId === model.id ? "is-active" : ""
+                                }`}
+                                key={model.id}
+                                onClick={() => updateSelectedProvider({ preferredModelId: model.id })}
+                                type="button"
+                              >
+                                <div className="catalog-list-copy">
+                                  <strong>{model.label}</strong>
+                                  <span>{model.id}</span>
+                                </div>
+                                <div className="catalog-list-tags">
+                                  <span className="signal-pill">{`${Math.round(model.maxContextWindow / 1024)}k context`}</span>
+                                  <span className="state-pill is-done">free</span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </section>
+                ) : (
+                  <section className="settings-section">
+                    <div className="settings-section-headline">
+                      <div>
+                        <div className="settings-provider-title">
+                          {selectedSkill?.label ?? "No skill selected"}
+                        </div>
+                        <div className="settings-provider-copy">
+                          Skills are user-defined external tools. Nothing is hardcoded into OpenGravity.
+                        </div>
+                      </div>
+                      <div className="settings-inline-actions">
+                        <button
+                          className="secondary-button slim-button"
+                          disabled={!selectedSkill || !selectedSkill.enabled || !selectedSkill.executablePath}
+                          onClick={() => void handleLaunchSkill()}
+                          type="button"
+                        >
+                          Launch
+                        </button>
+                        <button
+                          className="secondary-button slim-button"
+                          disabled={!selectedSkill}
+                          onClick={() =>
+                            setSkills((current) =>
+                              selectedSkill ? removeLocalSkill(current, selectedSkill.id) : current
+                            )
+                          }
+                          type="button"
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                </section>
+
+                    {selectedSkill ? (
+                      <>
+                        <label className="toggle-row">
+                          <input
+                            checked={selectedSkill.enabled}
+                            onChange={(event) =>
+                              setSkills((current) =>
+                                updateLocalSkill(current, selectedSkill.id, { enabled: event.target.checked })
+                              )
+                            }
+                            type="checkbox"
+                          />
+                          <span>Enable this skill</span>
+                        </label>
+
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`skill-label-${selectedSkill.id}`}>
+                            Label
+                          </label>
+                          <input
+                            id={`skill-label-${selectedSkill.id}`}
+                            className="settings-input"
+                            onChange={(event) =>
+                              setSkills((current) =>
+                                updateLocalSkill(current, selectedSkill.id, { label: event.target.value })
+                              )
+                            }
+                            value={selectedSkill.label}
+                          />
+                        </div>
+
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`skill-description-${selectedSkill.id}`}>
+                            Description
+                          </label>
+                          <textarea
+                            id={`skill-description-${selectedSkill.id}`}
+                            className="settings-textarea"
+                            onChange={(event) =>
+                              setSkills((current) =>
+                                updateLocalSkill(current, selectedSkill.id, { description: event.target.value })
+                              )
+                            }
+                            placeholder="Explain what this tool is for"
+                            value={selectedSkill.description}
+                          />
+                        </div>
+
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`skill-path-${selectedSkill.id}`}>
+                            Executable path
+                          </label>
+                          <input
+                            id={`skill-path-${selectedSkill.id}`}
+                            className="settings-input"
+                            onChange={(event) =>
+                              setSkills((current) =>
+                                updateLocalSkill(current, selectedSkill.id, { executablePath: event.target.value })
+                              )
+                            }
+                            placeholder="C:/Tools/MyTool/tool.exe"
+                            value={selectedSkill.executablePath}
+                          />
+                        </div>
+
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`skill-dir-${selectedSkill.id}`}>
+                            Working directory
+                          </label>
+                          <input
+                            id={`skill-dir-${selectedSkill.id}`}
+                            className="settings-input"
+                            onChange={(event) =>
+                              setSkills((current) =>
+                                updateLocalSkill(current, selectedSkill.id, { workingDirectory: event.target.value })
+                              )
+                            }
+                            placeholder="Optional working directory"
+                            value={selectedSkill.workingDirectory}
+                          />
+                        </div>
+
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor={`skill-args-${selectedSkill.id}`}>
+                            Arguments
+                          </label>
+                          <textarea
+                            id={`skill-args-${selectedSkill.id}`}
+                            className="settings-textarea"
+                            onChange={(event) =>
+                              setSkills((current) =>
+                                updateLocalSkill(current, selectedSkill.id, { argumentsText: event.target.value })
+                              )
+                            }
+                            placeholder={"One argument per line\nproject.gpr\nscript.py"}
+                            value={selectedSkill.argumentsText}
+                          />
+                          <div className="field-help">
+                            One argument per line keeps paths with spaces safe and predictable.
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="settings-empty-state">
+                        Add a skill from the left column to register local tools such as Ghidra or x64dbg.
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
             </div>
           </section>

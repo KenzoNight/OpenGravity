@@ -474,7 +474,7 @@ function resolveProviderHealth(
       };
     }
 
-    const connectionState = getProviderConnectionState(profile);
+    const connectionState = getProviderConnectionState(profile, settings);
     if (connectionState !== "ready") {
       const reason =
         connectionState === "disabled"

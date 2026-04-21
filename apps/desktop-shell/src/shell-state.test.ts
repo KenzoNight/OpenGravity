@@ -2,22 +2,22 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { browserFallbackHealth, buildDesktopShellSnapshot, desktopShellModels } from "./shell-state.js";
-import { createDefaultWorkbenchSettings, updateProviderProfile } from "./settings-state.js";
+import {
+  createDefaultWorkbenchSettings,
+  getPrimaryProviderAccount,
+  updateProviderAccount,
+  updateProviderProfile
+} from "./settings-state.js";
 
 function createConfiguredSettings() {
-  return updateProviderProfile(
-    updateProviderProfile(
-      createDefaultWorkbenchSettings(desktopShellModels),
-      "anthropic",
-      {
-        apiKey: "sk-ant-user-9090"
-      },
-      desktopShellModels
-    ),
-    "gemini",
-    {
-      apiKey: "AIza-user-key-7812"
-    },
+  const defaults = createDefaultWorkbenchSettings(desktopShellModels);
+  const anthropicAccount = getPrimaryProviderAccount(defaults, "anthropic");
+  const geminiAccount = getPrimaryProviderAccount(defaults, "gemini");
+
+  return updateProviderAccount(
+    updateProviderAccount(defaults, anthropicAccount!.id, { apiKey: "sk-ant-user-9090" }, desktopShellModels),
+    geminiAccount!.id,
+    { apiKey: "AIza-user-key-7812" },
     desktopShellModels
   );
 }
@@ -62,26 +62,34 @@ describe("buildDesktopShellSnapshot", () => {
 
   it("uses local provider settings to shape handoff routing", () => {
     const defaults = createDefaultWorkbenchSettings(desktopShellModels);
+    const anthropicAccount = getPrimaryProviderAccount(defaults, "anthropic");
+    const openAiAccount = getPrimaryProviderAccount(defaults, "openai");
     const settings = updateProviderProfile(
-      updateProviderProfile(
-        updateProviderProfile(
-          defaults,
-          "gemini",
+      updateProviderAccount(
+        updateProviderAccount(
+          updateProviderProfile(
+            defaults,
+            "gemini",
+            {
+              enabled: false
+            },
+            desktopShellModels
+          ),
+          anthropicAccount!.id,
           {
-            enabled: false,
-            apiKey: ""
+            apiKey: "sk-ant-user-9090"
           },
           desktopShellModels
         ),
-        "anthropic",
+        openAiAccount!.id,
         {
-          apiKey: "sk-ant-user-9090"
+          apiKey: "sk-user-openai-2048"
         },
         desktopShellModels
       ),
       "openai",
       {
-        apiKey: "sk-user-openai-2048"
+        enabled: true
       },
       desktopShellModels
     );

@@ -17,7 +17,7 @@ const preferredFiles = [
   "package.json"
 ];
 
-const basename = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
+const basename = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
 export function pickInitialWorkspaceFile(files: string[]): string {
   for (const preferredFile of preferredFiles) {

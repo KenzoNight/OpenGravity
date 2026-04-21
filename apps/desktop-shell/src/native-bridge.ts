@@ -78,6 +78,10 @@ export async function readWorkspaceFile(relativePath: string): Promise<Workspace
   }
 }
 
+export async function readExternalFile(absolutePath: string): Promise<WorkspaceFilePayload> {
+  return invokeCommand<WorkspaceFilePayload>("read_external_file", { absolutePath });
+}
+
 export async function writeWorkspaceFile(relativePath: string, content: string): Promise<WorkspaceFilePayload> {
   try {
     return await invokeCommand<WorkspaceFilePayload>("write_workspace_file", { relativePath, content });
@@ -87,6 +91,10 @@ export async function writeWorkspaceFile(relativePath: string, content: string):
       content
     };
   }
+}
+
+export async function writeExternalFile(absolutePath: string, content: string): Promise<WorkspaceFilePayload> {
+  return invokeCommand<WorkspaceFilePayload>("write_external_file", { absolutePath, content });
 }
 
 export async function runWorkspaceCommand(command: string): Promise<WorkspaceCommandResult> {
@@ -102,6 +110,14 @@ export async function runWorkspaceCommand(command: string): Promise<WorkspaceCom
       durationMs: 0
     };
   }
+}
+
+export async function launchSkillProcess(args: {
+  executablePath: string;
+  arguments: string[];
+  workingDirectory?: string;
+}): Promise<boolean> {
+  return invokeCommand<boolean>("launch_skill_process", args);
 }
 
 export async function startWorkspaceCommand(command: string): Promise<WorkspaceCommandStarted> {

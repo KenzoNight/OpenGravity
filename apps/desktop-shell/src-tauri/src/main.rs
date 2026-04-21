@@ -132,6 +132,17 @@ fn read_workspace_file(relative_path: String) -> Result<WorkspaceFilePayload, St
 }
 
 #[tauri::command]
+fn read_external_file(absolute_path: String) -> Result<WorkspaceFilePayload, String> {
+    let resolved = resolve_external_file_path(&absolute_path)?;
+    let content = read_text_file(&resolved)?;
+
+    Ok(WorkspaceFilePayload {
+        path: normalize_display_path(&resolved),
+        content,
+    })
+}
+
+#[tauri::command]
 fn write_workspace_file(relative_path: String, content: String) -> Result<WorkspaceFilePayload, String> {
     let resolved = resolve_workspace_path(&relative_path)?;
     if !resolved.is_file() {
@@ -156,6 +167,24 @@ fn write_workspace_file(relative_path: String, content: String) -> Result<Worksp
 }
 
 #[tauri::command]
+fn write_external_file(absolute_path: String, content: String) -> Result<WorkspaceFilePayload, String> {
+    let resolved = resolve_external_file_path(&absolute_path)?;
+
+    fs::write(&resolved, content.as_bytes()).map_err(|error| {
+        format!(
+            "Failed to write '{}': {}",
+            resolved.display(),
+            error
+        )
+    })?;
+
+    Ok(WorkspaceFilePayload {
+        path: normalize_display_path(&resolved),
+        content,
+    })
+}
+
+#[tauri::command]
 fn run_workspace_command(command: String) -> Result<WorkspaceCommandResult, String> {
     let trimmed_command = command.trim();
     validate_allowed_command(trimmed_command)?;
@@ -175,6 +204,34 @@ fn run_workspace_command(command: String) -> Result<WorkspaceCommandResult, Stri
         stderr,
         duration_ms,
     })
+}
+
+#[tauri::command]
+fn launch_skill_process(
+    executable_path: String,
+    arguments: Vec<String>,
+    working_directory: Option<String>,
+) -> Result<bool, String> {
+    let executable = resolve_external_file_path(&executable_path)?;
+    let mut command = Command::new(&executable);
+    command.args(arguments.into_iter().filter(|entry| !entry.trim().is_empty()));
+
+    if let Some(directory) = working_directory {
+        let resolved_directory = resolve_external_directory_path(&directory)?;
+        command.current_dir(resolved_directory);
+    }
+
+    command
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "Failed to launch external tool '{}': {}",
+                executable.display(),
+                error
+            )
+        })?;
+
+    Ok(true)
 }
 
 #[tauri::command]
@@ -433,6 +490,58 @@ fn resolve_workspace_path(relative_path: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn resolve_external_file_path(absolute_path: &str) -> Result<PathBuf, String> {
+    let trimmed = absolute_path.trim();
+    if trimmed.is_empty() {
+        return Err("External file path cannot be empty.".into());
+    }
+
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        return Err("External file path must be absolute.".into());
+    }
+
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "Failed to resolve external file '{}': {}",
+            absolute_path,
+            error
+        )
+    })?;
+
+    if !canonical.is_file() {
+        return Err(format!("External path '{}' is not a file.", canonical.display()));
+    }
+
+    Ok(canonical)
+}
+
+fn resolve_external_directory_path(absolute_path: &str) -> Result<PathBuf, String> {
+    let trimmed = absolute_path.trim();
+    if trimmed.is_empty() {
+        return Err("Working directory cannot be empty.".into());
+    }
+
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        return Err("Working directory must be an absolute path.".into());
+    }
+
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "Failed to resolve working directory '{}': {}",
+            absolute_path,
+            error
+        )
+    })?;
+
+    if !canonical.is_dir() {
+        return Err(format!("Path '{}' is not a directory.", canonical.display()));
+    }
+
+    Ok(canonical)
+}
+
 fn read_text_file(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).map_err(|error| {
         format!(
@@ -441,6 +550,10 @@ fn read_text_file(path: &Path) -> Result<String, String> {
             error
         )
     })
+}
+
+fn normalize_display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn pick_initial_file(files: &[String]) -> Option<String> {
@@ -691,10 +804,13 @@ fn main() {
             shell_health,
             workspace_snapshot,
             read_workspace_file,
+            read_external_file,
             write_workspace_file,
+            write_external_file,
             run_workspace_command,
             start_workspace_command,
-            cancel_workspace_command
+            cancel_workspace_command,
+            launch_skill_process
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OpenGravity desktop shell");
@@ -702,7 +818,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_run_id, pick_initial_file, sanitize_relative_path, validate_allowed_command};
+    use super::{
+        next_run_id, pick_initial_file, resolve_external_file_path, sanitize_relative_path,
+        validate_allowed_command,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn picks_preferred_workspace_file() {
@@ -722,6 +842,16 @@ mod tests {
     fn rejects_path_traversal() {
         assert!(sanitize_relative_path("../README.md").is_err());
         assert!(sanitize_relative_path("apps/desktop-shell/src/App.tsx").is_ok());
+    }
+
+    #[test]
+    fn requires_absolute_external_paths() {
+        assert!(resolve_external_file_path("README.md").is_err());
+        let missing = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("missing-file.txt")
+            .to_string_lossy()
+            .into_owned();
+        assert!(resolve_external_file_path(&missing).is_err());
     }
 
     #[test]
