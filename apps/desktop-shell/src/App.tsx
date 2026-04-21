@@ -81,6 +81,11 @@ import {
   type ChatMode
 } from "./chat-state";
 import {
+  extractAgentActionPlan,
+  type AgentActionStatus,
+  type AgentSuggestedAction
+} from "./agent-action-state";
+import {
   fetchOpenRouterCatalog,
   mergeModelCatalog,
   type ProviderCatalogSnapshot
@@ -420,6 +425,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => createDefaultChatSession().messages);
   const [chatHistoryReady, setChatHistoryReady] = useState(false);
   const [loadedChatHistoryKey, setLoadedChatHistoryKey] = useState("");
+  const [agentActionStatuses, setAgentActionStatuses] = useState<Record<string, AgentActionStatus>>({});
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowDispatchBusy, setWorkflowDispatchBusy] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
@@ -551,11 +557,13 @@ export default function App() {
       const session = rawValue ? normalizePersistedChatSession(JSON.parse(rawValue)) : createDefaultChatSession();
       setChatMode(session.mode);
       setChatMessages(session.messages);
+      setAgentActionStatuses({});
       setLoadedChatHistoryKey(chatHistoryKey);
     } catch {
       const fallbackSession = createDefaultChatSession();
       setChatMode(fallbackSession.mode);
       setChatMessages(fallbackSession.messages);
+      setAgentActionStatuses({});
       setLoadedChatHistoryKey(chatHistoryKey);
     } finally {
       setChatHistoryReady(true);
@@ -1580,7 +1588,52 @@ export default function App() {
     const nextSession = createDefaultChatSession();
     setChatMode(nextSession.mode);
     setChatMessages(nextSession.messages);
+    setAgentActionStatuses({});
     setWorkspaceNotice("Cleared chat history for this workspace.");
+  };
+
+  const handleApplyAgentAction = async (action: AgentSuggestedAction) => {
+    setAgentActionStatuses((current) => ({
+      ...current,
+      [action.id]: "running"
+    }));
+
+    try {
+      switch (action.type) {
+        case "open_file":
+          if (!action.path) {
+            throw new Error("Open file action is missing a path.");
+          }
+          await handleSelectFile(action.path);
+          break;
+        case "run_command":
+          if (!action.command) {
+            throw new Error("Run command action is missing a command.");
+          }
+          setTerminalInput(action.command);
+          await launchCommand(action.command);
+          break;
+        case "run_workflow":
+          if (action.workflow !== "recommended") {
+            throw new Error("Unsupported workflow action.");
+          }
+          handleStartWorkflow();
+          break;
+      }
+
+      setAgentActionStatuses((current) => ({
+        ...current,
+        [action.id]: "completed"
+      }));
+      setWorkspaceNotice(action.label);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Failed to apply ${action.label}.`;
+      setAgentActionStatuses((current) => ({
+        ...current,
+        [action.id]: "failed"
+      }));
+      setWorkspaceNotice(message);
+    }
   };
 
   const handleLaunchSkill = async () => {
@@ -1683,9 +1736,11 @@ export default function App() {
         settled.forEach((result, index) => {
           const target = parallelTargets[index]!;
           if (result.status === "fulfilled") {
+            const parsedResponse = extractAgentActionPlan(result.value.content);
             nextMessages.push(
-              createChatMessage("assistant", result.value.content, {
+              createChatMessage("assistant", parsedResponse.cleanContent || result.value.content, {
                 accountLabel: `${target.roleLabel} · ${result.value.accountLabel}`,
+                actionPlan: parsedResponse.actionPlan,
                 agentRole: target.roleLabel,
                 modelId: result.value.modelId
               })
@@ -1729,12 +1784,14 @@ export default function App() {
           provider: chatProfile.provider,
           sessionId: snapshot.sessionId
         });
+        const parsedResponse = extractAgentActionPlan(response.content);
 
         startTransition(() => {
           setChatMessages((current) => [
             ...current,
-            createChatMessage("assistant", response.content, {
+            createChatMessage("assistant", parsedResponse.cleanContent || response.content, {
               accountLabel: response.accountLabel,
+              actionPlan: parsedResponse.actionPlan,
               modelId: response.modelId
             })
           ]);
@@ -2803,6 +2860,51 @@ export default function App() {
                         {message.modelId ? <span>{message.modelId}</span> : null}
                       </div>
                       <div className="chat-message-body">{message.content}</div>
+                      {message.actionPlan ? (
+                        <div className="chat-action-plan">
+                          <div className="chat-action-plan-head">
+                            <strong>{message.actionPlan.summary}</strong>
+                            <span className="signal-pill">{message.actionPlan.actions.length} actions</span>
+                          </div>
+                          <div className="chat-action-list">
+                            {message.actionPlan.actions.map((action) => {
+                              const actionStatus = agentActionStatuses[action.id] ?? "idle";
+                              return (
+                                <div className="chat-action-row" key={action.id}>
+                                  <div className="compact-copy">
+                                    <strong>{action.label}</strong>
+                                    <span>
+                                      {action.description ??
+                                        action.command ??
+                                        action.path ??
+                                        (action.workflow === "recommended"
+                                          ? "Run the recommended workflow"
+                                          : action.type)}
+                                    </span>
+                                  </div>
+                                  <div className="chat-action-row-right">
+                                    <span className={`state-pill ${taskTone(actionStatus === "idle" ? "queued" : actionStatus === "running" ? "running" : actionStatus === "completed" ? "completed" : "failed")}`}>
+                                      {actionStatus}
+                                    </span>
+                                    <button
+                                      className="secondary-button slim-button"
+                                      disabled={actionStatus === "running"}
+                                      onClick={() => void handleApplyAgentAction(action)}
+                                      type="button"
+                                    >
+                                      {action.type === "open_file"
+                                        ? "Open"
+                                        : action.type === "run_command"
+                                          ? "Run"
+                                          : "Start"}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>

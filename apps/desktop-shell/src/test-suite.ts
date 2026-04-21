@@ -1,5 +1,6 @@
 import "./shell-state.test.js";
 import "./settings-state.test.js";
+import "./agent-action-state.test.js";
 import "./chat-state.test.js";
 import "./editor-state.test.js";
 import "./integrations-state.test.js";

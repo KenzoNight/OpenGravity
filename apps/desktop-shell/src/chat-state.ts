@@ -1,4 +1,5 @@
 import type { DesktopShellSnapshot } from "./shell-state";
+import { normalizeAgentActionPlan, type AgentActionPlan } from "./agent-action-state";
 
 export type ChatMode = "ask" | "planning" | "agent";
 export type ChatMessageRole = "user" | "assistant" | "system";
@@ -8,6 +9,7 @@ export interface ChatMessage {
   role: ChatMessageRole;
   content: string;
   accountLabel?: string;
+  actionPlan?: AgentActionPlan;
   modelId?: string;
   agentRole?: string;
   timestamp: string;
@@ -60,6 +62,7 @@ function normalizeChatMessage(value: unknown, fallbackIndex: number): ChatMessag
     role,
     content,
     accountLabel: typeof input.accountLabel === "string" ? input.accountLabel.trim() : undefined,
+    actionPlan: normalizeAgentActionPlan(input.actionPlan),
     modelId: typeof input.modelId === "string" ? input.modelId.trim() : undefined,
     agentRole: typeof input.agentRole === "string" ? input.agentRole.trim() : undefined,
     timestamp: typeof input.timestamp === "string" && input.timestamp.trim() ? input.timestamp : new Date().toISOString()
@@ -69,13 +72,14 @@ function normalizeChatMessage(value: unknown, fallbackIndex: number): ChatMessag
 export function createChatMessage(
   role: ChatMessageRole,
   content: string,
-  metadata: Partial<Pick<ChatMessage, "accountLabel" | "agentRole" | "modelId" | "timestamp">> = {}
+  metadata: Partial<Pick<ChatMessage, "accountLabel" | "actionPlan" | "agentRole" | "modelId" | "timestamp">> = {}
 ): ChatMessage {
   return {
     id: createMessageId(),
     role,
     content,
     accountLabel: metadata.accountLabel,
+    actionPlan: metadata.actionPlan,
     modelId: metadata.modelId,
     agentRole: metadata.agentRole,
     timestamp: metadata.timestamp ?? new Date().toISOString()
@@ -173,6 +177,7 @@ export function buildChatSystemPrompt(
       "Mode: ASK.",
       "You must answer the user's question directly and conservatively.",
       "Do not propose code edits, do not output patches, do not suggest writing files, and do not suggest running commands unless the user explicitly asks for commands.",
+      "Do not include an opengravity-actions block.",
       "Do not act like you changed anything in the workspace.",
       activeFileSnippet
     ].join("\n\n");
@@ -184,6 +189,7 @@ export function buildChatSystemPrompt(
       "Mode: PLANNING.",
       "You must produce a plan only.",
       "Do not write code, do not output patches, do not generate file contents, do not generate shell commands, and do not claim that any change was made.",
+      "Do not include an opengravity-actions block.",
       "Use numbered steps and call out risks, assumptions, and validation steps.",
       activeFileSnippet
     ].join("\n\n");
@@ -194,6 +200,9 @@ export function buildChatSystemPrompt(
     "Mode: AGENT.",
     "You may reason about concrete implementation details and propose code-level changes.",
     "However, you are still a chat response in this environment: do not claim to have edited files unless the UI explicitly tells you a change was applied.",
+    'When you want the UI to act, append one final ```opengravity-actions code block with strict JSON only.',
+    'The JSON schema is {"summary":"...","actions":[{"type":"open_file","path":"..."},{"type":"run_command","command":"..."},{"type":"run_workflow","workflow":"recommended"}]}.',
+    "Only include actions that are safe and relevant. Keep the normal explanation outside the JSON block.",
     activeFileSnippet
   ].join("\n\n");
 }

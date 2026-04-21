@@ -921,6 +921,39 @@ button {
   line-height: 1.55;
 }
 
+.chat-action-plan {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-action-plan-head,
+.chat-action-row,
+.chat-action-row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-action-plan-head,
+.chat-action-row {
+  justify-content: space-between;
+}
+
+.chat-action-row {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-action-list {
+  display: grid;
+  gap: 8px;
+}
+
 .composer-actions {
   display: flex;
   gap: 8px;
