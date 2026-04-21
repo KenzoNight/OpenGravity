@@ -16,9 +16,11 @@ import {
   formatEditorLanguageLabel
 } from "./editor-state";
 import {
+  browserFallbackRepositorySnapshot,
   browserFallbackWorkspace,
   cancelWorkspaceCommand,
   launchSkillProcess,
+  loadRepositorySnapshot,
   loadWorkspaceSnapshot,
   readExternalFile,
   listenToWorkspaceCommands,
@@ -29,6 +31,14 @@ import {
   writeWorkspaceFile,
   type WorkspaceSnapshotPayload
 } from "./native-bridge";
+import {
+  createDefaultIntegrationSettings,
+  integrationsStorageKey,
+  normalizeIntegrationSettings,
+  serializeIntegrationSettings,
+  type IntegrationSettings
+} from "./integrations-state";
+import { fetchGitHubRepositorySignals, type GitHubRepositorySignals } from "./github-state";
 import {
   addProviderAccount,
   createDefaultWorkbenchSettings,
@@ -53,6 +63,10 @@ import {
   type ProviderProfile,
   type WorkbenchSettings
 } from "./settings-state";
+import {
+  parseRepositorySnapshot,
+  type ParsedRepositorySnapshot
+} from "./repository-state";
 import {
   buildProviderChatMessages,
   canRunAgentWorkflow,
@@ -131,8 +145,9 @@ declare global {
 
 type SideView = "overview" | "handoff" | "artifacts" | "runtime";
 type BottomView = "build" | "tasks" | "events" | "log" | "terminal";
-type SettingsView = "providers" | "skills";
+type SettingsView = "providers" | "skills" | "integrations";
 type MenuId = "file" | "edit" | "selection" | "view" | "go" | "run" | "terminal" | "help";
+type PrimaryView = "source-control" | "explorer" | "agents" | "workflows" | "artifacts" | "search";
 
 interface ExplorerGroup {
   label: string;
@@ -150,12 +165,13 @@ const menuItems: Array<{ id: MenuId; label: string }> = [
   { id: "help", label: "Help" }
 ];
 
-const activityItems = [
-  { id: "EX", label: "Explorer", active: true },
-  { id: "AG", label: "Agents" },
-  { id: "WF", label: "Workflows" },
-  { id: "AR", label: "Artifacts" },
-  { id: "SR", label: "Search" }
+const activityItems: Array<{ id: PrimaryView; shortLabel: string; label: string }> = [
+  { id: "source-control", shortLabel: "SC", label: "Source Control" },
+  { id: "explorer", shortLabel: "EX", label: "Explorer" },
+  { id: "agents", shortLabel: "AG", label: "Agents" },
+  { id: "workflows", shortLabel: "WF", label: "Workflows" },
+  { id: "artifacts", shortLabel: "AR", label: "Artifacts" },
+  { id: "search", shortLabel: "SR", label: "Search" }
 ];
 
 const editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = {
@@ -207,6 +223,24 @@ function loadLocalSkills(): LocalSkill[] {
   }
 }
 
+function loadIntegrationSettings(): IntegrationSettings {
+  const defaults = createDefaultIntegrationSettings();
+  if (typeof window === "undefined" || !window.localStorage) {
+    return defaults;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(integrationsStorageKey);
+    if (!rawValue) {
+      return defaults;
+    }
+
+    return normalizeIntegrationSettings(JSON.parse(rawValue));
+  } catch {
+    return defaults;
+  }
+}
+
 function isExternalDocumentPath(path: string): boolean {
   return /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\") || path.startsWith("/");
 }
@@ -216,7 +250,13 @@ function normalizePathSlashes(path: string): string {
 }
 
 function isCompatibleChatProvider(provider: ModelProvider): boolean {
-  return provider === "gemini" || provider === "openrouter" || provider === "openai" || provider === "custom";
+  return (
+    provider === "gemini" ||
+    provider === "groq" ||
+    provider === "openrouter" ||
+    provider === "openai" ||
+    provider === "custom"
+  );
 }
 
 async function loadShellHealth(): Promise<ShellHealth> {
@@ -302,15 +342,20 @@ function buildExplorerGroups(paths: string[]): ExplorerGroup[] {
 export default function App() {
   const [shellHealth, setShellHealth] = useState<ShellHealth>(browserFallbackHealth);
   const [settings, setSettings] = useState<WorkbenchSettings>(() => loadWorkbenchSettings());
+  const [integrations, setIntegrations] = useState<IntegrationSettings>(() => loadIntegrationSettings());
   const [workspace, setWorkspace] = useState<WorkspaceSnapshotPayload>(browserFallbackWorkspace);
+  const [repository, setRepository] = useState<ParsedRepositorySnapshot>(() =>
+    parseRepositorySnapshot(browserFallbackRepositorySnapshot)
+  );
   const [activeFilePath, setActiveFilePath] = useState(browserFallbackWorkspace.activeFilePath);
   const [openDocuments, setOpenDocuments] = useState<WorkspaceDocument[]>([
     createWorkspaceDocument(browserFallbackWorkspace.activeFilePath, browserFallbackWorkspace.activeFileContent)
   ]);
   const [openMenuId, setOpenMenuId] = useState<MenuId | null>(null);
+  const [primaryView, setPrimaryView] = useState<PrimaryView>("explorer");
   const [sideView, setSideView] = useState<SideView>("overview");
   const [bottomView, setBottomView] = useState<BottomView>("terminal");
-  const [bottomOpen, setBottomOpen] = useState(true);
+  const [bottomOpen, setBottomOpen] = useState(false);
   const [activityBarOpen, setActivityBarOpen] = useState(true);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [dockOpen, setDockOpen] = useState(true);
@@ -332,6 +377,11 @@ export default function App() {
   const [openRouterCatalog, setOpenRouterCatalog] = useState<ProviderCatalogSnapshot | null>(null);
   const [providerCatalogBusy, setProviderCatalogBusy] = useState<ModelProvider | null>(null);
   const [providerCatalogError, setProviderCatalogError] = useState<string | null>(null);
+  const [agentDetailsOpen, setAgentDetailsOpen] = useState(false);
+  const [repositoryBusy, setRepositoryBusy] = useState(false);
+  const [githubBusy, setGithubBusy] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
+  const [githubSignals, setGithubSignals] = useState<GitHubRepositorySignals | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("ask");
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
@@ -359,6 +409,12 @@ export default function App() {
           createWorkspaceDocument(nextWorkspace.activeFilePath, nextWorkspace.activeFileContent)
         ]);
         setWorkspaceNotice(`Loaded ${nextWorkspace.files.length} workspace files.`);
+      });
+    });
+
+    void loadRepositorySnapshot().then((nextRepository) => {
+      startTransition(() => {
+        setRepository(parseRepositorySnapshot(nextRepository));
       });
     });
   }, []);
@@ -406,6 +462,14 @@ export default function App() {
 
     window.localStorage.setItem(skillsStorageKey, serializeLocalSkills(skills));
   }, [skills]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+
+    window.localStorage.setItem(integrationsStorageKey, serializeIntegrationSettings(integrations));
+  }, [integrations]);
 
   useEffect(() => {
     if (!settings.providerProfiles.some((profile) => profile.provider === selectedProvider)) {
@@ -519,10 +583,15 @@ export default function App() {
   const activeChatProfile = activeLiveModel
     ? settings.providerProfiles.find((profile) => profile.provider === activeLiveModel.provider)
     : undefined;
+  const fallbackChatProfile = settings.providerProfiles.find(
+    (profile) => isCompatibleChatProvider(profile.provider) && getReadyProviderAccounts(settings, profile.provider).length > 0
+  );
   const chatProfile =
     activeChatProfile && isCompatibleChatProvider(activeChatProfile.provider)
       ? activeChatProfile
-      : selectedProfile;
+      : selectedProfile && isCompatibleChatProvider(selectedProfile.provider)
+        ? selectedProfile
+        : fallbackChatProfile;
   const chatAccounts = chatProfile ? getReadyProviderAccounts(settings, chatProfile.provider) : [];
   const chatModelId =
     chatProfile && activeLiveModel && chatProfile.provider === activeLiveModel.provider
@@ -542,6 +611,18 @@ export default function App() {
   const selectedTerminalSession =
     terminalSessions.find((session) => session.runId === selectedTerminalRunId) ?? terminalSessions[0] ?? null;
   const workflowProgress = workflowRun ? getWorkflowProgress(workflowRun) : null;
+  const repositoryHasChanges = repository.changes.length > 0;
+  const githubRemote = repository.githubRemote;
+  const workspaceDisplayName = labelForFilePath(workspace.rootPath || "Workspace");
+  const githubSignalsLabel = githubSignals
+    ? `${githubSignals.pulls.length} PRs · ${githubSignals.issues.length} issues`
+    : githubRemote
+      ? "Refresh GitHub"
+      : "No GitHub remote";
+  const normalizedSettings = useMemo(
+    () => normalizeWorkbenchSettings(settings, modelCatalog),
+    [modelCatalog, settings]
+  );
   const workbenchClassName = [
     "workbench",
     !activityBarOpen && "is-activity-collapsed",
@@ -556,8 +637,48 @@ export default function App() {
   }, [workflowTemplate]);
 
   useEffect(() => {
-    setSettings((current) => normalizeWorkbenchSettings(current, modelCatalog));
-  }, [modelCatalog]);
+    if (serializeWorkbenchSettings(settings) === serializeWorkbenchSettings(normalizedSettings)) {
+      return;
+    }
+
+    setSettings(normalizedSettings);
+  }, [normalizedSettings, settings]);
+
+  useEffect(() => {
+    if (!githubRemote || !integrations.githubAutoRefresh) {
+      return;
+    }
+
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const nextSignals = await fetchGitHubRepositorySignals(githubRemote, integrations.githubToken);
+        if (disposed) {
+          return;
+        }
+
+        startTransition(() => {
+          setGithubSignals(nextSignals);
+          setGithubError(null);
+        });
+      } catch (error) {
+        if (disposed) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : "GitHub refresh failed.";
+        startTransition(() => {
+          setGithubSignals(null);
+          setGithubError(message);
+        });
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, [githubRemote, integrations.githubAutoRefresh, integrations.githubToken]);
 
   useEffect(() => {
     if (!terminalInput && commandPresets[0]) {
@@ -689,6 +810,286 @@ export default function App() {
       });
     } finally {
       setWorkspaceBusy(false);
+    }
+  };
+
+  const renderPrimaryPane = () => {
+    switch (primaryView) {
+      case "explorer":
+        return (
+          <>
+            <div className="pane-header">
+              <span>Explorer</span>
+              <span className="pane-meta">{workspace.files.length} workspace files</span>
+            </div>
+
+            <div className="pane-scroll">
+              <section className="section-block">
+                <div className="section-label">Open editors</div>
+                <div className="flat-list">
+                  {editorTabs.map((tabPath) => (
+                    <button
+                      className={`flat-list-row ${tabPath === activeFilePath ? "is-active" : ""}`}
+                      key={tabPath}
+                      onClick={() => void handleSelectFile(tabPath)}
+                      type="button"
+                    >
+                      <span>{labelForFilePath(tabPath)}</span>
+                      {isDocumentDirty(
+                        getWorkspaceDocument(openDocuments, tabPath)?.savedContent ?? "",
+                        getWorkspaceDocument(openDocuments, tabPath)?.currentContent ?? ""
+                      ) ? <span className="dirty-dot" /> : null}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="section-block">
+                <div className="section-label">Workspace</div>
+                <div className="explorer-search">
+                  <input
+                    className="explorer-search-input"
+                    onChange={(event) => setExplorerQuery(event.target.value)}
+                    placeholder="Filter workspace files"
+                    value={explorerQuery}
+                  />
+                </div>
+                <div className="tree-root">{workspace.rootPath}</div>
+                {explorerGroups.map((group) => (
+                  <div className="tree-group" key={group.label}>
+                    <div className={`tree-item ${group.label === "root" ? "is-root-group" : "is-folder"}`}>
+                      <span>{group.label === "root" ? "root" : group.label}</span>
+                    </div>
+                    <div className="tree-children">
+                      {group.entries.map((entry) => {
+                        const absolutePath = group.label === "root" ? entry : `${group.label}/${entry}`;
+                        return (
+                          <button
+                            className={`tree-item is-file ${absolutePath === activeFilePath ? "is-active" : ""}`}
+                            key={absolutePath}
+                            onClick={() => void handleSelectFile(absolutePath)}
+                            type="button"
+                          >
+                            <span>{entry}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </section>
+            </div>
+          </>
+        );
+      case "source-control":
+        return (
+          <>
+            <div className="pane-header">
+              <span>Source Control</span>
+              <span className="pane-meta">
+                {repository.available ? `${repository.changes.length} changes` : "No git metadata"}
+              </span>
+            </div>
+
+            <div className="pane-scroll">
+              <section className="section-block compact-section-block">
+                <div className="source-control-toolbar">
+                  <div className="source-control-branch">
+                    <strong>{repository.branch || "No branch"}</strong>
+                    <span>{repository.available ? repository.trackingSummary : "Git metadata unavailable"}</span>
+                  </div>
+                  <div className="settings-inline-actions">
+                    <button
+                      className="secondary-button slim-button"
+                      disabled={!repository.available || repositoryBusy}
+                      onClick={() => void handleRefreshRepository()}
+                      type="button"
+                    >
+                      {repositoryBusy ? "Refreshing..." : "Refresh"}
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="section-block compact-section-block">
+                <div className="section-label">Changes</div>
+                {repository.changes.length === 0 ? (
+                  <div className="settings-empty-state">Working tree is clean.</div>
+                ) : (
+                  <div className="compact-list compact-list-tight">
+                    {repository.changes.map((change) => (
+                      <button
+                        className={`compact-change-row ${change.path === activeFilePath ? "is-active" : ""}`}
+                        key={`${change.statusCode}-${change.path}`}
+                        onClick={() => void handleSelectFile(change.path)}
+                        type="button"
+                      >
+                        <span className="compact-change-status">{change.statusCode.trim() || "M"}</span>
+                        <div className="compact-copy">
+                          <strong>{labelForFilePath(change.path)}</strong>
+                          <span>{change.path}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="section-block compact-section-block">
+                <div className="section-label">GitHub</div>
+                {githubError ? <div className="workflow-warning">{githubError}</div> : null}
+                <div className="summary-line">
+                  <span>Remote</span>
+                  <strong>{githubRemote ? `${githubRemote.owner}/${githubRemote.repo}` : "Not connected"}</strong>
+                </div>
+                <div className="summary-line">
+                  <span>Open items</span>
+                  <strong>{githubSignalsLabel}</strong>
+                </div>
+                <div className="settings-inline-actions">
+                  <button
+                    className="secondary-button slim-button"
+                    disabled={!githubRemote || githubBusy}
+                    onClick={() => void handleRefreshGitHub()}
+                    type="button"
+                  >
+                    {githubBusy ? "Refreshing..." : "Refresh GitHub"}
+                  </button>
+                  <button
+                    className="secondary-button slim-button"
+                    disabled={!repositoryHasChanges}
+                    onClick={() => void handleCopyCommitSuggestion()}
+                    type="button"
+                  >
+                    Copy commit title
+                  </button>
+                </div>
+              </section>
+            </div>
+          </>
+        );
+      case "agents":
+        return (
+          <>
+            <div className="pane-header">
+              <span>Agents</span>
+              <span className="pane-meta">{snapshot.agents.length} registered</span>
+            </div>
+
+            <div className="pane-scroll">
+              <section className="section-block">
+                <div className="compact-list">
+                  {snapshot.agents.map((agent) => (
+                    <div className="compact-row" key={agent.id}>
+                      <div className="compact-copy">
+                        <strong>{agent.label}</strong>
+                        <span>{agent.role}</span>
+                      </div>
+                      <span className={`state-pill ${agentTone(agent.status)}`}>{agent.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </>
+        );
+      case "workflows":
+        return (
+          <>
+            <div className="pane-header">
+              <span>Workflows</span>
+              <span className="pane-meta">
+                {workflowProgress ? `${workflowProgress.completed}/${workflowProgress.total}` : "Idle"}
+              </span>
+            </div>
+
+            <div className="pane-scroll">
+              <section className="section-block">
+                <div className="summary-card">
+                  <strong>{workflowRun?.status ?? "ready"}</strong>
+                  <p>
+                    {workflowRun
+                      ? `${workflowProgress?.completed ?? 0} of ${workflowProgress?.total ?? 0} steps have finished.`
+                      : "The recommended workflow has not started yet."}
+                  </p>
+                </div>
+              </section>
+
+              <section className="section-block">
+                <div className="compact-list">
+                  {(workflowRun?.items ?? workflowTemplate.items).map((item) => (
+                    <div className="compact-row" key={item.id}>
+                      <div className="compact-copy">
+                        <strong>{item.label}</strong>
+                        <span>{item.command}</span>
+                      </div>
+                      <span className={`state-pill ${taskTone(item.status)}`}>{item.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </>
+        );
+      case "artifacts":
+        return (
+          <>
+            <div className="pane-header">
+              <span>Artifacts</span>
+              <span className="pane-meta">{recentArtifacts.length} recent</span>
+            </div>
+
+            <div className="pane-scroll">
+              <section className="section-block">
+                <div className="compact-list">
+                  {recentArtifacts.map((artifact) => (
+                    <div className="artifact-row" key={artifact.id}>
+                      <div className="compact-copy">
+                        <strong>{artifact.title}</strong>
+                        <span>{artifact.contentSummary}</span>
+                      </div>
+                      <span className="signal-pill">{artifact.kind}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </>
+        );
+      case "search":
+        return (
+          <>
+            <div className="pane-header">
+              <span>Search</span>
+              <span className="pane-meta">{filteredWorkspaceFiles.length} matches</span>
+            </div>
+
+            <div className="pane-scroll">
+              <section className="section-block">
+                <div className="explorer-search">
+                  <input
+                    className="explorer-search-input"
+                    onChange={(event) => setExplorerQuery(event.target.value)}
+                    placeholder="Search workspace files"
+                    value={explorerQuery}
+                  />
+                </div>
+                <div className="flat-list">
+                  {filteredWorkspaceFiles.map((path) => (
+                    <button
+                      className={`flat-list-row ${path === activeFilePath ? "is-active" : ""}`}
+                      key={path}
+                      onClick={() => void handleSelectFile(path)}
+                      type="button"
+                    >
+                      <span>{path}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </>
+        );
     }
   };
 
@@ -860,6 +1261,63 @@ export default function App() {
       });
     } finally {
       setProviderCatalogBusy(null);
+    }
+  };
+
+  const handleRefreshRepository = async () => {
+    setRepositoryBusy(true);
+
+    try {
+      const nextRepository = await loadRepositorySnapshot();
+      startTransition(() => {
+        setRepository(parseRepositorySnapshot(nextRepository));
+        setWorkspaceNotice(
+          nextRepository.available
+            ? `Loaded ${nextRepository.statusLines.filter((line) => !line.startsWith("##")).length} local git changes.`
+            : "Git metadata is not available for this workspace."
+        );
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Repository refresh failed.";
+      startTransition(() => setWorkspaceNotice(message));
+    } finally {
+      setRepositoryBusy(false);
+    }
+  };
+
+  const handleRefreshGitHub = async () => {
+    if (!githubRemote) {
+      setGithubError("No GitHub remote is configured for this workspace.");
+      return;
+    }
+
+    setGithubBusy(true);
+    setGithubError(null);
+
+    try {
+      const nextSignals = await fetchGitHubRepositorySignals(githubRemote, integrations.githubToken);
+      startTransition(() => {
+        setGithubSignals(nextSignals);
+        setWorkspaceNotice(`Loaded ${nextSignals.pulls.length} pull requests and ${nextSignals.issues.length} issues.`);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "GitHub refresh failed.";
+      startTransition(() => {
+        setGithubSignals(null);
+        setGithubError(message);
+        setWorkspaceNotice(message);
+      });
+    } finally {
+      setGithubBusy(false);
+    }
+  };
+
+  const handleCopyCommitSuggestion = async () => {
+    try {
+      await navigator.clipboard.writeText(repository.commitSuggestion);
+      setWorkspaceNotice("Copied the commit suggestion to the clipboard.");
+    } catch {
+      setWorkspaceNotice(repository.commitSuggestion);
     }
   };
 
@@ -1144,6 +1602,7 @@ export default function App() {
               label: "Open active file in explorer",
               disabled: !activeFilePath,
               onSelect: () => {
+                setPrimaryView("explorer");
                 setExplorerOpen(true);
                 setWorkspaceNotice(`Revealed ${labelForFilePath(activeFilePath)} in Explorer.`);
               }
@@ -1154,8 +1613,17 @@ export default function App() {
             {
               label: "Focus explorer",
               onSelect: () => {
+                setPrimaryView("explorer");
                 setExplorerOpen(true);
                 setWorkspaceNotice("Explorer is visible.");
+              }
+            },
+            {
+              label: "Focus source control",
+              onSelect: () => {
+                setPrimaryView("source-control");
+                setExplorerOpen(true);
+                setWorkspaceNotice("Source Control is visible.");
               }
             },
             {
@@ -1204,6 +1672,20 @@ export default function App() {
           ];
         case "go":
           return [
+            {
+              label: "Source Control",
+              onSelect: () => {
+                setPrimaryView("source-control");
+                setExplorerOpen(true);
+              }
+            },
+            {
+              label: "Explorer",
+              onSelect: () => {
+                setPrimaryView("explorer");
+                setExplorerOpen(true);
+              }
+            },
             {
               label: "README",
               onSelect: () => void handleSelectFile("README.md")
@@ -1469,23 +1951,10 @@ export default function App() {
           <>
             <div className="bottom-panel-header">
               <span className="section-label">Terminal</span>
-              <span className="dock-chip">{terminalBusy ? "running" : `${terminalSessions.length} runs`}</span>
+              <span className="dock-chip">{terminalBusy ? "running" : selectedTerminalSession ? "ready" : "idle"}</span>
             </div>
             <div className="drawer-content terminal-drawer-content">
               <div className="terminal-toolbar">
-                <div className="terminal-presets">
-                  {commandPresets.map((preset) => (
-                    <button
-                      className="terminal-preset"
-                      disabled={terminalBusy}
-                      key={preset.id}
-                      onClick={() => void runPreset(preset)}
-                      type="button"
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
                 <div className="terminal-runner">
                   <input
                     className="terminal-input"
@@ -1518,88 +1987,58 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="terminal-workbench">
-                <aside className="terminal-session-list">
-                  {terminalSessions.length === 0 ? (
-                    <div className="terminal-empty-state terminal-empty-state-compact">
-                      Run a workspace command to open a native session.
-                    </div>
-                  ) : (
-                    terminalSessions.map((session) => (
-                      <button
-                        className={`terminal-session-item ${
-                          session.runId === selectedTerminalSession?.runId ? "is-active" : ""
-                        }`}
-                        key={session.runId}
-                        onClick={() => setSelectedTerminalRunId(session.runId)}
-                        type="button"
-                      >
-                        <div className="terminal-session-copy">
-                          <strong>{session.command}</strong>
-                          <span>{formatCommandSummary(session)}</span>
-                        </div>
-                        <span
-                          className={`state-pill ${
-                            session.status === "running"
-                              ? "is-running"
-                              : session.status === "completed"
-                                ? "is-done"
-                                : session.status === "cancelled"
-                                  ? "is-blocked"
-                                  : "is-failed"
-                          }`}
-                        >
-                          {session.status}
-                        </span>
-                      </button>
-                    ))
-                  )}
-                </aside>
-
-                <section className="terminal-session-panel">
-                  <div className="terminal-session-header">
-                    <div className="terminal-session-copy">
-                      <strong>{selectedTerminalSession?.command ?? "No session selected"}</strong>
-                      <span>
-                        {selectedTerminalSession
-                          ? selectedTerminalSession.message ?? formatCommandSummary(selectedTerminalSession)
-                          : "Select a command run to inspect live output."}
-                      </span>
-                    </div>
-                    {selectedTerminalSession ? (
-                      <div className="terminal-session-actions">
-                        <span
-                          className={`state-pill ${
-                            selectedTerminalSession.status === "running"
-                              ? "is-running"
-                              : selectedTerminalSession.status === "completed"
-                                ? "is-done"
-                                : selectedTerminalSession.status === "cancelled"
-                                  ? "is-blocked"
-                                  : "is-failed"
-                          }`}
-                        >
-                          {formatCommandSummary(selectedTerminalSession)}
-                        </span>
-                        <button
-                          className="secondary-button slim-button"
-                          onClick={() => setTerminalInput(selectedTerminalSession.command)}
-                          type="button"
-                        >
-                          Reuse command
-                        </button>
-                      </div>
-                    ) : null}
+              {selectedTerminalSession ? (
+                <div className="terminal-session-header terminal-session-header-compact">
+                  <div className="terminal-session-copy">
+                    <strong>{selectedTerminalSession.command}</strong>
+                    <span>{selectedTerminalSession.message ?? formatCommandSummary(selectedTerminalSession)}</span>
                   </div>
-
-                  <div className="terminal-session-body">
-                    <TerminalSurface
-                      emptyLabel="Run a workspace command to see native output here."
-                      session={selectedTerminalSession}
-                    />
+                  <div className="terminal-session-actions">
+                    <span
+                      className={`state-pill ${
+                        selectedTerminalSession.status === "running"
+                          ? "is-running"
+                          : selectedTerminalSession.status === "completed"
+                            ? "is-done"
+                            : selectedTerminalSession.status === "cancelled"
+                              ? "is-blocked"
+                              : "is-failed"
+                      }`}
+                    >
+                      {formatCommandSummary(selectedTerminalSession)}
+                    </span>
+                    <button
+                      className="secondary-button slim-button"
+                      onClick={() => setTerminalInput(selectedTerminalSession.command)}
+                      type="button"
+                    >
+                      Reuse
+                    </button>
                   </div>
-                </section>
+                </div>
+              ) : null}
+
+              <div className="terminal-panel-simple">
+                <TerminalSurface
+                  emptyLabel="Run a workspace command to see native output here."
+                  session={selectedTerminalSession}
+                />
               </div>
+
+              {terminalSessions.length > 1 ? (
+                <div className="terminal-history-strip">
+                  {terminalSessions.slice(0, 6).map((session) => (
+                    <button
+                      className={`terminal-history-chip ${session.runId === selectedTerminalSession?.runId ? "is-active" : ""}`}
+                      key={session.runId}
+                      onClick={() => setSelectedTerminalRunId(session.runId)}
+                      type="button"
+                    >
+                      {session.command}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </>
         );
@@ -1610,13 +2049,7 @@ export default function App() {
     <div className="window-shell">
       <header className="window-chrome">
         <div className="window-title">OpenGravity</div>
-        <div className="window-subtitle">Hybrid Agent Operating System</div>
-        <div className="window-telemetry">
-          <span>{snapshot.profile.primaryLanguage?.toUpperCase() ?? "UNKNOWN"}</span>
-          <span>{snapshot.executionPlan.primaryBuildSystem ?? "inspect"}</span>
-          <span>{snapshot.runtimeStats.running} active</span>
-          <span>{activeModelLabel}</span>
-        </div>
+        <div className="window-workspace-label">{workspaceDisplayName}</div>
       </header>
 
       <div className="menu-strip">
@@ -1635,9 +2068,7 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="session-path">
-          {workspace.rootPath} / session {snapshot.sessionId}
-        </div>
+        <div className="session-path">{activeFilePath ? labelForFilePath(activeFilePath) : workspaceDisplayName}</div>
 
         <div className="session-pills">
           <button
@@ -1648,28 +2079,38 @@ export default function App() {
             Explorer
           </button>
           <button
+            className={`chrome-toggle ${primaryView === "source-control" ? "is-on" : ""}`}
+            onClick={() => {
+              setPrimaryView("source-control");
+              setExplorerOpen(true);
+            }}
+            type="button"
+          >
+            Source Control
+          </button>
+          <button
             className={`chrome-toggle ${bottomOpen ? "is-on" : ""}`}
             onClick={() => setBottomOpen((value) => !value)}
             type="button"
           >
-            Workbench
+            Terminal
           </button>
           <button
             className={`chrome-toggle ${dockOpen ? "is-on" : ""}`}
             onClick={() => setDockOpen((value) => !value)}
             type="button"
           >
-            Agent
+            Chat
           </button>
           <button
-            className={`chrome-toggle ${settingsOpen ? "is-on" : ""}`}
-            onClick={() => setSettingsOpen((value) => !value)}
+            className="chrome-toggle"
+            onClick={() => setSettingsOpen(true)}
             type="button"
           >
-            Providers
+            Settings
           </button>
           <span className={`chrome-pill ${snapshot.setupRequired ? "" : "accent"}`}>
-            {snapshot.setupRequired ? "Setup required" : `Active ${activeModelLabel}`}
+            {snapshot.setupRequired ? "Provider setup" : "Ready"}
           </span>
         </div>
       </div>
@@ -1679,79 +2120,23 @@ export default function App() {
           <aside className="activity-rail">
             {activityItems.map((item) => (
               <button
-                className={`activity-button ${item.active ? "is-active" : ""}`}
+                className={`activity-button ${primaryView === item.id ? "is-active" : ""}`}
                 key={item.id}
+                onClick={() => {
+                  setPrimaryView(item.id);
+                  setExplorerOpen(true);
+                }}
                 type="button"
                 title={item.label}
               >
-                <span>{item.id}</span>
+                <span>{item.shortLabel}</span>
               </button>
             ))}
           </aside>
         ) : null}
 
         <aside className="pane explorer-pane">
-          <div className="pane-header">
-            <span>Explorer</span>
-            <span className="pane-meta">{workspace.files.length} workspace files</span>
-          </div>
-
-          <div className="pane-scroll">
-            <section className="section-block">
-              <div className="section-label">Open editors</div>
-              <div className="flat-list">
-                {editorTabs.map((tabPath) => (
-                  <button
-                    className={`flat-list-row ${tabPath === activeFilePath ? "is-active" : ""}`}
-                    key={tabPath}
-                    onClick={() => void handleSelectFile(tabPath)}
-                    type="button"
-                  >
-                    <span>{labelForFilePath(tabPath)}</span>
-                    {isDocumentDirty(
-                      getWorkspaceDocument(openDocuments, tabPath)?.savedContent ?? "",
-                      getWorkspaceDocument(openDocuments, tabPath)?.currentContent ?? ""
-                    ) ? <span className="dirty-dot" /> : null}
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="section-block">
-              <div className="section-label">Workspace</div>
-              <div className="explorer-search">
-                <input
-                  className="explorer-search-input"
-                  onChange={(event) => setExplorerQuery(event.target.value)}
-                  placeholder="Filter workspace files"
-                  value={explorerQuery}
-                />
-              </div>
-              <div className="tree-root">{workspace.rootPath}</div>
-              {explorerGroups.map((group) => (
-                <div className="tree-group" key={group.label}>
-                  <div className={`tree-item ${group.label === "root" ? "is-root-group" : "is-folder"}`}>
-                    <span>{group.label === "root" ? "root" : group.label}</span>
-                  </div>
-                  <div className="tree-children">
-                    {group.entries.map((entry) => {
-                      const absolutePath = group.label === "root" ? entry : `${group.label}/${entry}`;
-                      return (
-                        <button
-                          className={`tree-item is-file ${absolutePath === activeFilePath ? "is-active" : ""}`}
-                          key={absolutePath}
-                          onClick={() => void handleSelectFile(absolutePath)}
-                          type="button"
-                        >
-                          <span>{entry}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </section>
-          </div>
+          {renderPrimaryPane()}
         </aside>
 
         <main className="editor-column">
@@ -1772,8 +2157,6 @@ export default function App() {
             <div className="editor-toolbar">
               <div className="breadcrumbs">{activeFilePath || "No file selected"}</div>
               <div className="editor-toolbar-right">
-                <span className="editor-badge">{workspaceBusy ? "Loading" : activeDocumentLanguageLabel}</span>
-                <span className="editor-badge">{`${activeDocumentLineCount} lines`}</span>
                 <span className={`editor-badge ${editorDirty ? "" : "accent"}`}>
                   {editorDirty ? "Unsaved" : "Saved"}
                 </span>
@@ -1982,46 +2365,68 @@ export default function App() {
                   </button>
                 </div>
                 <div className="composer-footer">
-                  <span>{chatProviderLabel}</span>
-                  <span>{chatModelId || "No model configured"}</span>
-                  <span>{chatAccounts.length} chat accounts ready</span>
+                  <span>
+                    {chatAccounts.length > 0
+                      ? `${chatAccounts.length} account${chatAccounts.length === 1 ? "" : "s"} ready`
+                      : "No provider connected"}
+                  </span>
                 </div>
               </div>
             </section>
 
             <section className="section-block">
-              <div className="side-tabs">
+              <div className="settings-section-headline">
+                <div>
+                  <div className="section-label">Session details</div>
+                  <div className="settings-provider-copy">
+                    Keep the chat focused. Expand this only when you need runtime context.
+                  </div>
+                </div>
                 <button
-                  className={`side-tab ${sideView === "overview" ? "is-active" : ""}`}
-                  onClick={() => setSideView("overview")}
+                  className="secondary-button slim-button"
+                  onClick={() => setAgentDetailsOpen((value) => !value)}
                   type="button"
                 >
-                  Overview
-                </button>
-                <button
-                  className={`side-tab ${sideView === "handoff" ? "is-active" : ""}`}
-                  onClick={() => setSideView("handoff")}
-                  type="button"
-                >
-                  Handoff
-                </button>
-                <button
-                  className={`side-tab ${sideView === "artifacts" ? "is-active" : ""}`}
-                  onClick={() => setSideView("artifacts")}
-                  type="button"
-                >
-                  Artifacts
-                </button>
-                <button
-                  className={`side-tab ${sideView === "runtime" ? "is-active" : ""}`}
-                  onClick={() => setSideView("runtime")}
-                  type="button"
-                >
-                  Runtime
+                  {agentDetailsOpen ? "Hide" : "Show"}
                 </button>
               </div>
 
-              <div className="side-panel">{renderSideView()}</div>
+              {agentDetailsOpen ? (
+                <>
+                  <div className="side-tabs">
+                    <button
+                      className={`side-tab ${sideView === "overview" ? "is-active" : ""}`}
+                      onClick={() => setSideView("overview")}
+                      type="button"
+                    >
+                      Overview
+                    </button>
+                    <button
+                      className={`side-tab ${sideView === "handoff" ? "is-active" : ""}`}
+                      onClick={() => setSideView("handoff")}
+                      type="button"
+                    >
+                      Handoff
+                    </button>
+                    <button
+                      className={`side-tab ${sideView === "artifacts" ? "is-active" : ""}`}
+                      onClick={() => setSideView("artifacts")}
+                      type="button"
+                    >
+                      Artifacts
+                    </button>
+                    <button
+                      className={`side-tab ${sideView === "runtime" ? "is-active" : ""}`}
+                      onClick={() => setSideView("runtime")}
+                      type="button"
+                    >
+                      Runtime
+                    </button>
+                  </div>
+
+                  <div className="side-panel">{renderSideView()}</div>
+                </>
+              ) : null}
             </section>
           </div>
         </aside>
@@ -2029,11 +2434,9 @@ export default function App() {
 
       {statusBarOpen ? (
         <footer className="statusbar">
-          <span>{workspace.rootPath}</span>
-          <span>{activeFilePath || "No file selected"}</span>
-          <span>{activeDocumentLanguageLabel}</span>
+          <span>{labelForFilePath(activeFilePath || workspace.rootPath)}</span>
           <span>{dirtyDocumentCount > 0 ? `${dirtyDocumentCount} dirty buffers` : "All buffers saved"}</span>
-          <span>{readyProviders.length} providers ready</span>
+          <span>{repository.branch || "No git branch"}</span>
         </footer>
       ) : null}
 
@@ -2144,6 +2547,13 @@ export default function App() {
                   >
                     Skills
                   </button>
+                  <button
+                    className={`secondary-button slim-button ${settingsView === "integrations" ? "is-active" : ""}`}
+                    onClick={() => setSettingsView("integrations")}
+                    type="button"
+                  >
+                    Integrations
+                  </button>
                 </div>
                 <button className="secondary-button" onClick={() => setSettingsOpen(false)} type="button">
                   Close
@@ -2218,7 +2628,7 @@ export default function App() {
                       </div>
                     </section>
                   </>
-                ) : (
+                ) : settingsView === "skills" ? (
                   <section className="settings-section">
                     <div className="settings-section-headline">
                       <div>
@@ -2259,6 +2669,32 @@ export default function App() {
                           </button>
                         ))
                       )}
+                    </div>
+                  </section>
+                ) : (
+                  <section className="settings-section">
+                    <div className="settings-section">
+                      <div className="settings-section-headline">
+                        <div>
+                          <div className="settings-provider-title">GitHub</div>
+                          <div className="settings-provider-copy">
+                            Connect GitHub signals to the Source Control panel without hardcoding anything.
+                          </div>
+                        </div>
+                        <span className={`state-pill ${githubRemote ? "is-done" : "is-waiting"}`}>
+                          {githubRemote ? "remote detected" : "no remote"}
+                        </span>
+                      </div>
+
+                      <div className="provider-list">
+                        <button className="provider-list-item is-active" type="button">
+                          <div className="provider-list-copy">
+                            <strong>{githubRemote ? `${githubRemote.owner}/${githubRemote.repo}` : "GitHub signals"}</strong>
+                            <span>{githubRemote ? githubRemote.url : "Add a GitHub remote or use a public repository."}</span>
+                          </div>
+                          <span className="state-pill is-running">{githubSignalsLabel}</span>
+                        </button>
+                      </div>
                     </div>
                   </section>
                 )}
@@ -2469,6 +2905,8 @@ export default function App() {
                                 ? "http://127.0.0.1:11434/v1"
                                 : selectedProfile.provider === "gemini"
                                   ? "https://generativelanguage.googleapis.com/v1beta/openai"
+                                : selectedProfile.provider === "groq"
+                                  ? "https://api.groq.com/openai/v1"
                                 : selectedProfile.provider === "openrouter"
                                   ? "https://openrouter.ai/api/v1"
                                   : selectedProfile.provider === "openai"
@@ -2480,6 +2918,7 @@ export default function App() {
                           <div className="field-help">
                             {selectedProfile.provider === "anthropic" ||
                             selectedProfile.provider === "gemini" ||
+                            selectedProfile.provider === "groq" ||
                             selectedProfile.provider === "openai"
                               ? "The default endpoint is prefilled. Change it only if you are using a proxy or compatible endpoint."
                               : "Required for OpenRouter, local runtimes, and compatible endpoints."}
@@ -2544,7 +2983,7 @@ export default function App() {
                       </div>
                     ) : null}
                   </section>
-                ) : (
+                ) : settingsView === "skills" ? (
                   <section className="settings-section">
                     <div className="settings-section-headline">
                       <div>
@@ -2686,6 +3125,105 @@ export default function App() {
                         Add a skill from the left column to register local tools such as Ghidra or x64dbg.
                       </div>
                     )}
+                  </section>
+                ) : (
+                  <section className="settings-section">
+                    <div className="settings-section-headline">
+                      <div>
+                        <div className="settings-provider-title">GitHub Integration</div>
+                        <div className="settings-provider-copy">
+                          Source Control can pull live pull requests and issues for public or private GitHub repositories.
+                        </div>
+                      </div>
+                      <span className={`state-pill ${githubRemote ? "is-done" : "is-waiting"}`}>
+                        {githubRemote ? "connected remote" : "no remote"}
+                      </span>
+                    </div>
+
+                    <label className="toggle-row">
+                      <input
+                        checked={integrations.githubAutoRefresh}
+                        onChange={(event) =>
+                          setIntegrations((current) => ({
+                            ...current,
+                            githubAutoRefresh: event.target.checked
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      <span>Refresh GitHub signals automatically when the workbench opens</span>
+                    </label>
+
+                    <div className="settings-field">
+                      <label className="field-label" htmlFor="github-token">
+                        GitHub token
+                      </label>
+                      <div className="secret-row">
+                        <input
+                          id="github-token"
+                          className="settings-input"
+                          onChange={(event) =>
+                            setIntegrations((current) => ({
+                              ...current,
+                              githubToken: event.target.value
+                            }))
+                          }
+                          placeholder="Optional for public repositories, recommended for private repos and higher limits"
+                          type={visibleSecrets["github-token"] ? "text" : "password"}
+                          value={integrations.githubToken}
+                        />
+                        <button
+                          className="secondary-button"
+                          onClick={() =>
+                            setVisibleSecrets((current) => ({
+                              ...current,
+                              "github-token": !current["github-token"]
+                            }))
+                          }
+                          type="button"
+                        >
+                          {visibleSecrets["github-token"] ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                      <div className="field-help">
+                        {integrations.githubToken
+                          ? `Stored locally for this prototype: ${maskSecret(integrations.githubToken)}`
+                          : "Leave empty for public repository signals."}
+                      </div>
+                    </div>
+
+                    <div className="settings-field">
+                      <label className="field-label" htmlFor="github-remote">
+                        Detected remote
+                      </label>
+                      <input
+                        id="github-remote"
+                        className="settings-input"
+                        readOnly
+                        value={githubRemote ? githubRemote.url : "No GitHub remote detected"}
+                      />
+                    </div>
+
+                    <div className="settings-inline-actions">
+                      <button
+                        className="secondary-button slim-button"
+                        disabled={!githubRemote || githubBusy}
+                        onClick={() => void handleRefreshGitHub()}
+                        type="button"
+                      >
+                        {githubBusy ? "Refreshing..." : "Refresh GitHub"}
+                      </button>
+                      <button
+                        className="secondary-button slim-button"
+                        disabled={repositoryBusy}
+                        onClick={() => void handleRefreshRepository()}
+                        type="button"
+                      >
+                        {repositoryBusy ? "Refreshing..." : "Refresh repository"}
+                      </button>
+                    </div>
+
+                    {githubError ? <div className="workflow-warning">{githubError}</div> : null}
                   </section>
                 )}
               </div>

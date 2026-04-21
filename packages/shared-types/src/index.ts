@@ -11,6 +11,7 @@ export type AgentRole =
 export type ModelProvider =
   | "anthropic"
   | "gemini"
+  | "groq"
   | "openai"
   | "openrouter"
   | "ollama"

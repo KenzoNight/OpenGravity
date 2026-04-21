@@ -128,6 +128,24 @@ export const desktopShellModels: ModelDescriptor[] = [
     maxContextWindow: 1048576
   },
   {
+    id: "openai/gpt-oss-20b",
+    label: "Groq GPT-OSS 20B",
+    provider: "groq",
+    qualityTier: "balanced",
+    costTier: "low",
+    supportsTools: true,
+    maxContextWindow: 131072
+  },
+  {
+    id: "openai/gpt-oss-120b",
+    label: "Groq GPT-OSS 120B",
+    provider: "groq",
+    qualityTier: "strong",
+    costTier: "medium",
+    supportsTools: true,
+    maxContextWindow: 131072
+  },
+  {
     id: "gpt-5",
     label: "GPT-5",
     provider: "openai",
@@ -183,6 +201,12 @@ const baseProviderHealth: ProviderHealth[] = [
     state: "degraded",
     scoreModifier: 4,
     reason: "Healthy fallback, but with less spare context headroom."
+  },
+  {
+    provider: "groq",
+    state: "healthy",
+    scoreModifier: 12,
+    reason: "Low-latency OpenAI-compatible routing is available for fast agent loops."
   },
   {
     provider: "openrouter",

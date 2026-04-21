@@ -30,6 +30,7 @@ interface CompatibleChatResponse {
 
 const defaultBaseUrls: Partial<Record<ModelProvider, string>> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
+  groq: "https://api.groq.com/openai/v1",
   openai: "https://api.openai.com/v1",
   openrouter: "https://openrouter.ai/api/v1"
 };
@@ -60,12 +61,18 @@ function resolveBaseUrl(provider: ModelProvider, account: ProviderAccount): stri
 }
 
 function ensureCompatibleProvider(provider: ModelProvider): void {
-  if (provider === "gemini" || provider === "openrouter" || provider === "openai" || provider === "custom") {
+  if (
+    provider === "gemini" ||
+    provider === "groq" ||
+    provider === "openrouter" ||
+    provider === "openai" ||
+    provider === "custom"
+  ) {
     return;
   }
 
   throw new Error(
-    `${provider} chat routing is not wired into the desktop shell yet. Use Gemini, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint for now.`
+    `${provider} chat routing is not wired into the desktop shell yet. Use Gemini, Groq, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint for now.`
   );
 }
 
@@ -105,7 +112,6 @@ export async function sendCompatibleChatCompletion(args: {
       body: JSON.stringify({
         model: args.modelId,
         messages: args.messages,
-        session_id: args.sessionId,
         temperature: args.mode === "agent" ? 0.25 : 0.15
       })
     });

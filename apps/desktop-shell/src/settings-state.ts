@@ -36,6 +36,7 @@ export type ProviderConnectionState =
 const providerOrder: ModelProvider[] = [
   "anthropic",
   "gemini",
+  "groq",
   "openai",
   "openrouter",
   "ollama",
@@ -45,16 +46,18 @@ const providerOrder: ModelProvider[] = [
 const providerLabels: Record<ModelProvider, string> = {
   anthropic: "Anthropic",
   gemini: "Gemini",
+  groq: "Groq",
   openai: "OpenAI",
   openrouter: "OpenRouter",
   ollama: "Ollama",
   custom: "Custom"
 };
 
-const defaultEnabledProviders = new Set<ModelProvider>(["anthropic", "gemini", "openai"]);
+const defaultEnabledProviders = new Set<ModelProvider>(["anthropic", "gemini", "groq", "openai"]);
 
 const defaultBaseUrls: Partial<Record<ModelProvider, string>> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
+  groq: "https://api.groq.com/openai/v1",
   openai: "https://api.openai.com/v1",
   openrouter: "https://openrouter.ai/api/v1",
   ollama: "http://127.0.0.1:11434/v1",

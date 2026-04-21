@@ -35,6 +35,16 @@ export interface WorkspaceCommandEventPayload {
   message?: string;
 }
 
+export interface RepositorySnapshotPayload {
+  available: boolean;
+  workspaceRoot: string;
+  repositoryRoot: string;
+  branch: string;
+  originUrl: string;
+  statusLines: string[];
+  recentCommitLines: string[];
+}
+
 const browserFallbackFile = "apps/desktop-shell/src/App.tsx";
 
 const browserFallbackContent = `export default function App() {
@@ -54,6 +64,16 @@ export const browserFallbackWorkspace: WorkspaceSnapshotPayload = {
   activeFileContent: browserFallbackContent
 };
 
+export const browserFallbackRepositorySnapshot: RepositorySnapshotPayload = {
+  available: false,
+  workspaceRoot: "browser-preview",
+  repositoryRoot: "",
+  branch: "preview",
+  originUrl: "",
+  statusLines: [],
+  recentCommitLines: []
+};
+
 async function invokeCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
@@ -64,6 +84,14 @@ export async function loadWorkspaceSnapshot(): Promise<WorkspaceSnapshotPayload>
     return await invokeCommand<WorkspaceSnapshotPayload>("workspace_snapshot");
   } catch {
     return browserFallbackWorkspace;
+  }
+}
+
+export async function loadRepositorySnapshot(): Promise<RepositorySnapshotPayload> {
+  try {
+    return await invokeCommand<RepositorySnapshotPayload>("repository_snapshot");
+  } catch {
+    return browserFallbackRepositorySnapshot;
   }
 }
 

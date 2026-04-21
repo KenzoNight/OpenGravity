@@ -47,6 +47,18 @@ struct WorkspaceSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RepositorySnapshot {
+    available: bool,
+    workspace_root: String,
+    repository_root: String,
+    branch: String,
+    origin_url: String,
+    status_lines: Vec<String>,
+    recent_commit_lines: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceFilePayload {
     path: String,
     content: String,
@@ -117,6 +129,55 @@ fn workspace_snapshot() -> Result<WorkspaceSnapshot, String> {
         files,
         active_file_path,
         active_file_content,
+    })
+}
+
+#[tauri::command]
+fn repository_snapshot() -> Result<RepositorySnapshot, String> {
+    let root = workspace_root()?;
+    let repository_root = match run_git_command(&["rev-parse", "--show-toplevel"], &root) {
+        Ok(output) => output.trim().to_string(),
+        Err(_) => {
+            return Ok(RepositorySnapshot {
+                available: false,
+                workspace_root: root.to_string_lossy().into_owned(),
+                repository_root: String::new(),
+                branch: String::new(),
+                origin_url: String::new(),
+                status_lines: Vec::new(),
+                recent_commit_lines: Vec::new(),
+            })
+        }
+    };
+
+    let repository_root_path = PathBuf::from(&repository_root);
+    let branch = run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"], &repository_root_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let origin_url = run_git_command(&["remote", "get-url", "origin"], &repository_root_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let status_lines = split_non_empty_lines(
+        &run_git_command(&["status", "--short", "--branch"], &repository_root_path).unwrap_or_default(),
+    );
+    let recent_commit_lines = split_non_empty_lines(
+        &run_git_command(
+            &["log", "--pretty=format:%H%x09%s%x09%cr", "-n", "12"],
+            &repository_root_path,
+        )
+        .unwrap_or_default(),
+    );
+
+    Ok(RepositorySnapshot {
+        available: true,
+        workspace_root: root.to_string_lossy().into_owned(),
+        repository_root,
+        branch,
+        origin_url,
+        status_lines,
+        recent_commit_lines,
     })
 }
 
@@ -556,6 +617,13 @@ fn normalize_display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+fn split_non_empty_lines(value: &str) -> Vec<String> {
+    value.lines()
+        .map(|entry| normalize_line_endings(entry.to_string()).trim().to_string())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
 fn pick_initial_file(files: &[String]) -> Option<String> {
     const PREFERRED_FILES: [&str; 4] = [
         "apps/desktop-shell/src/App.tsx",
@@ -797,12 +865,45 @@ fn normalize_line_endings(value: String) -> String {
     value.replace("\r\n", "\n")
 }
 
+fn run_git_command(args: &[&str], working_directory: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(working_directory)
+        .output()
+        .map_err(|error| {
+            format!(
+                "Failed to launch git command '{}': {}",
+                args.join(" "),
+                error
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = normalize_line_endings(String::from_utf8_lossy(&output.stderr).into_owned());
+        let message = if stderr.trim().is_empty() {
+            format!(
+                "git command '{}' exited with status {}.",
+                args.join(" "),
+                output.status.code().unwrap_or(-1)
+            )
+        } else {
+            stderr
+        };
+        return Err(message.trim().to_string());
+    }
+
+    Ok(normalize_line_endings(
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    ))
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(CommandRegistry::default())
         .invoke_handler(tauri::generate_handler![
             shell_health,
             workspace_snapshot,
+            repository_snapshot,
             read_workspace_file,
             read_external_file,
             write_workspace_file,
@@ -820,7 +921,7 @@ fn main() {
 mod tests {
     use super::{
         next_run_id, pick_initial_file, resolve_external_file_path, sanitize_relative_path,
-        validate_allowed_command,
+        split_non_empty_lines, validate_allowed_command,
     };
     use std::path::PathBuf;
 
@@ -871,5 +972,13 @@ mod tests {
 
         assert_ne!(first, second);
         assert!(first.starts_with("cmd-"));
+    }
+
+    #[test]
+    fn splits_non_empty_output_lines() {
+        assert_eq!(
+            split_non_empty_lines("line one\r\n\r\nline two\n"),
+            vec!["line one".to_string(), "line two".to_string()]
+        );
     }
 }
