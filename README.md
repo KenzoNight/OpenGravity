@@ -130,11 +130,12 @@ Already implemented:
 - an early provider settings and API key management surface
 - workspace file reading and saving through Tauri commands
 - desktop command execution with a guarded allowlist
+- streaming command sessions with cancel support
 
 Not finished yet:
 
 - Monaco editor integration
-- rich terminal emulation and live streaming output
+- rich terminal emulation with PTY-grade interaction
 - native secret vault for provider credentials
 - multi-tab document state and conflict handling
 - full agent manager workflows

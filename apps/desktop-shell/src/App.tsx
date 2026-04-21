@@ -9,10 +9,15 @@ import type {
 
 import {
   browserFallbackWorkspace,
+  cancelWorkspaceCommand,
   loadWorkspaceSnapshot,
+  listenToWorkspaceCommands,
   readWorkspaceFile,
   runWorkspaceCommand,
+  startWorkspaceCommand,
   writeWorkspaceFile,
+  type WorkspaceCommandEventPayload,
+  type WorkspaceCommandStarted,
   type WorkspaceCommandResult,
   type WorkspaceSnapshotPayload
 } from "./native-bridge";
@@ -67,6 +72,17 @@ type BottomView = "build" | "tasks" | "events" | "log" | "terminal";
 interface ExplorerGroup {
   label: string;
   entries: string[];
+}
+
+interface TerminalSession {
+  runId: string;
+  command: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  stdout: string;
+  stderr: string;
+  exitCode?: number;
+  durationMs?: number;
+  message?: string;
 }
 
 const menuItems = ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"];
@@ -177,12 +193,95 @@ function buildExplorerGroups(paths: string[]): ExplorerGroup[] {
   }));
 }
 
-function formatCommandSummary(result: WorkspaceCommandResult): string {
-  if (result.success) {
-    return `Exit ${result.exitCode} · ${result.durationMs} ms`;
+function formatCommandSummary(session: Pick<TerminalSession, "status" | "exitCode" | "durationMs">): string {
+  const durationLabel = typeof session.durationMs === "number" ? ` · ${session.durationMs} ms` : "";
+
+  switch (session.status) {
+    case "running":
+      return "Running";
+    case "completed":
+      return `Exit ${session.exitCode ?? 0}${durationLabel}`;
+    case "cancelled":
+      return `Cancelled (${session.exitCode ?? -1})${durationLabel}`;
+    case "failed":
+      return `Failed (${session.exitCode ?? -1})${durationLabel}`;
+  }
+}
+
+function createTerminalSession(started: WorkspaceCommandStarted): TerminalSession {
+  return {
+    runId: started.runId,
+    command: started.command,
+    status: "running",
+    stdout: "",
+    stderr: ""
+  };
+}
+
+function appendTerminalLine(existing: string, nextLine?: string): string {
+  if (!nextLine) {
+    return existing;
   }
 
-  return `Failed (${result.exitCode}) · ${result.durationMs} ms`;
+  return existing ? `${existing}\n${nextLine}` : nextLine;
+}
+
+function applyWorkspaceCommandEvent(
+  sessions: TerminalSession[],
+  payload: WorkspaceCommandEventPayload
+): TerminalSession[] {
+  return sessions.map((session) => {
+    if (session.runId !== payload.runId) {
+      return session;
+    }
+
+    if (payload.kind === "stdout") {
+      return {
+        ...session,
+        stdout: appendTerminalLine(session.stdout, payload.line)
+      };
+    }
+
+    if (payload.kind === "stderr") {
+      return {
+        ...session,
+        stderr: appendTerminalLine(session.stderr, payload.line)
+      };
+    }
+
+    if (payload.kind === "cancelled") {
+      return {
+        ...session,
+        status: "cancelled",
+        exitCode: payload.exitCode,
+        durationMs: payload.durationMs,
+        message: payload.message
+      };
+    }
+
+    if (payload.kind === "completed") {
+      return {
+        ...session,
+        status: payload.success ? "completed" : "failed",
+        exitCode: payload.exitCode,
+        durationMs: payload.durationMs,
+        message: payload.message
+      };
+    }
+
+    if (payload.kind === "launch-failed") {
+      return {
+        ...session,
+        status: "failed",
+        stderr: appendTerminalLine(session.stderr, payload.message),
+        exitCode: payload.exitCode,
+        durationMs: payload.durationMs,
+        message: payload.message
+      };
+    }
+
+    return session;
+  });
 }
 
 export default function App() {
@@ -203,9 +302,9 @@ export default function App() {
   const [visibleSecrets, setVisibleSecrets] = useState<Partial<Record<ModelProvider, boolean>>>({});
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [terminalBusy, setTerminalBusy] = useState(false);
+  const [activeTerminalRunId, setActiveTerminalRunId] = useState<string | null>(null);
   const [terminalInput, setTerminalInput] = useState("");
-  const [terminalHistory, setTerminalHistory] = useState<WorkspaceCommandResult[]>([]);
+  const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
   const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
   const [explorerQuery, setExplorerQuery] = useState("");
 
@@ -224,6 +323,33 @@ export default function App() {
         setWorkspaceNotice(`Loaded ${nextWorkspace.files.length} workspace files.`);
       });
     });
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten = () => {};
+
+    void listenToWorkspaceCommands((payload) => {
+      if (disposed) {
+        return;
+      }
+
+      startTransition(() => {
+        setTerminalSessions((current) => applyWorkspaceCommandEvent(current, payload));
+
+        if (payload.kind === "completed" || payload.kind === "cancelled" || payload.kind === "launch-failed") {
+          setActiveTerminalRunId((current) => (current === payload.runId ? null : current));
+          setWorkspaceNotice(payload.message ?? `Command finished: ${payload.command}`);
+        }
+      });
+    }).then((nextUnlisten) => {
+      unlisten = nextUnlisten;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten();
+    };
   }, []);
 
   useEffect(() => {
@@ -271,6 +397,8 @@ export default function App() {
     ? isDocumentDirty(activeDocument.savedContent, activeDocument.currentContent)
     : false;
   const dirtyDocumentCount = getDirtyWorkspaceDocumentCount(openDocuments);
+  const terminalBusy = activeTerminalRunId !== null;
+  const activeTerminalSession = terminalSessions.find((session) => session.runId === activeTerminalRunId) ?? null;
   const workbenchClassName = [
     "workbench",
     !explorerOpen && "is-explorer-collapsed",
@@ -375,17 +503,43 @@ export default function App() {
 
     setBottomView("terminal");
     setBottomOpen(true);
-    setTerminalBusy(true);
     setWorkspaceNotice(`Running ${trimmed}`);
 
     try {
-      const result = await runWorkspaceCommand(trimmed);
+      const started = await startWorkspaceCommand(trimmed);
       startTransition(() => {
-        setTerminalHistory((current) => [result, ...current].slice(0, 10));
+        setActiveTerminalRunId(started.runId);
+        setTerminalSessions((current) => [createTerminalSession(started), ...current].slice(0, 12));
+      });
+    } catch {
+      const result = await runWorkspaceCommand(trimmed);
+      const fallbackSession: TerminalSession = {
+        runId: `fallback-${Date.now()}`,
+        command: result.command,
+        status: result.success ? "completed" : "failed",
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs
+      };
+
+      startTransition(() => {
+        setTerminalSessions((current) => [fallbackSession, ...current].slice(0, 12));
         setWorkspaceNotice(result.success ? `Command finished: ${trimmed}` : `Command failed: ${trimmed}`);
       });
-    } finally {
-      setTerminalBusy(false);
+    }
+  };
+
+  const handleCancelActiveCommand = async () => {
+    if (!activeTerminalRunId) {
+      return;
+    }
+
+    try {
+      await cancelWorkspaceCommand(activeTerminalRunId);
+      setWorkspaceNotice(`Cancelling ${activeTerminalSession?.command ?? activeTerminalRunId}`);
+    } catch {
+      setWorkspaceNotice("Cancel request failed.");
     }
   };
 
@@ -587,7 +741,7 @@ export default function App() {
           <>
             <div className="bottom-panel-header">
               <span className="section-label">Command bridge</span>
-              <span className="dock-chip">{terminalBusy ? "running" : `${terminalHistory.length} runs`}</span>
+              <span className="dock-chip">{terminalBusy ? "running" : `${terminalSessions.length} runs`}</span>
             </div>
             <div className="drawer-content terminal-drawer-content">
               <div className="terminal-toolbar">
@@ -611,37 +765,56 @@ export default function App() {
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
                         event.preventDefault();
-                        void handleRunCommand(terminalInput);
+                        if (!terminalBusy) {
+                          void handleRunCommand(terminalInput);
+                        }
                       }
                     }}
                     placeholder="Run an allowed workspace command"
                     value={terminalInput}
                   />
-                  <button
-                    className="primary-button"
-                    disabled={terminalBusy || terminalInput.trim().length === 0}
-                    onClick={() => void handleRunCommand(terminalInput)}
-                    type="button"
-                  >
-                    {terminalBusy ? "Running..." : "Run"}
-                  </button>
+                  {terminalBusy ? (
+                    <button className="secondary-button" onClick={() => void handleCancelActiveCommand()} type="button">
+                      Cancel
+                    </button>
+                  ) : (
+                    <button
+                      className="primary-button"
+                      disabled={terminalInput.trim().length === 0}
+                      onClick={() => void handleRunCommand(terminalInput)}
+                      type="button"
+                    >
+                      Run
+                    </button>
+                  )}
                 </div>
               </div>
 
               <div className="terminal-history">
-                {terminalHistory.length === 0 ? (
+                {terminalSessions.length === 0 ? (
                   <div className="terminal-empty-state">Run a workspace command to see native output here.</div>
                 ) : (
-                  terminalHistory.map((result, index) => (
-                    <div className="terminal-card" key={`${result.command}-${index}`}>
+                  terminalSessions.map((session) => (
+                    <div className="terminal-card" key={session.runId}>
                       <div className="terminal-card-header">
-                        <strong>{result.command}</strong>
-                        <span className={`state-pill ${result.success ? "is-done" : "is-failed"}`}>
-                          {formatCommandSummary(result)}
+                        <strong>{session.command}</strong>
+                        <span
+                          className={`state-pill ${
+                            session.status === "running"
+                              ? "is-running"
+                              : session.status === "completed"
+                                ? "is-done"
+                                : session.status === "cancelled"
+                                  ? "is-blocked"
+                                  : "is-failed"
+                          }`}
+                        >
+                          {formatCommandSummary(session)}
                         </span>
                       </div>
-                      {result.stdout ? <pre className="terminal-output">{result.stdout}</pre> : null}
-                      {result.stderr ? <pre className="terminal-output is-error">{result.stderr}</pre> : null}
+                      {session.message ? <div className="terminal-meta-line">{session.message}</div> : null}
+                      {session.stdout ? <pre className="terminal-output">{session.stdout}</pre> : null}
+                      {session.stderr ? <pre className="terminal-output is-error">{session.stderr}</pre> : null}
                     </div>
                   ))
                 )}

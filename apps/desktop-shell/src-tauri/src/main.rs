@@ -1,10 +1,29 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Instant;
+use tauri::{AppHandle, Emitter, State};
+
+static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Default)]
+struct CommandRegistry {
+    runs: Arc<Mutex<HashMap<String, RunningProcess>>>,
+}
+
+#[derive(Clone)]
+struct RunningProcess {
+    pid: u32,
+    cancellation_requested: bool,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +63,26 @@ struct WorkspaceCommandResult {
     duration_ms: u128,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceCommandStarted {
+    run_id: String,
+    command: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceCommandEventPayload {
+    run_id: String,
+    command: String,
+    kind: String,
+    line: Option<String>,
+    success: Option<bool>,
+    exit_code: Option<i32>,
+    duration_ms: Option<u128>,
+    message: Option<String>,
+}
+
 #[tauri::command]
 fn shell_health() -> ShellHealth {
     ShellHealth {
@@ -56,7 +95,7 @@ fn shell_health() -> ShellHealth {
             "Tauri window shell".into(),
             "Rust backend commands".into(),
             "Workspace file bridge".into(),
-            "Desktop command bridge".into(),
+            "Streaming desktop command bridge".into(),
             "Browser-safe preview fallback".into(),
         ],
     }
@@ -122,7 +161,7 @@ fn run_workspace_command(command: String) -> Result<WorkspaceCommandResult, Stri
     validate_allowed_command(trimmed_command)?;
 
     let started_at = Instant::now();
-    let output = run_shell_command(trimmed_command, &workspace_root()?)?;
+    let output = run_blocking_shell_command(trimmed_command, &workspace_root()?)?;
     let duration_ms = started_at.elapsed().as_millis();
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = normalize_line_endings(String::from_utf8_lossy(&output.stdout).into_owned());
@@ -136,6 +175,145 @@ fn run_workspace_command(command: String) -> Result<WorkspaceCommandResult, Stri
         stderr,
         duration_ms,
     })
+}
+
+#[tauri::command]
+fn start_workspace_command(
+    app: AppHandle,
+    registry: State<CommandRegistry>,
+    command: String,
+) -> Result<WorkspaceCommandStarted, String> {
+    let trimmed_command = command.trim();
+    validate_allowed_command(trimmed_command)?;
+
+    let run_id = next_run_id();
+    let workspace = workspace_root()?;
+    let started_at = Instant::now();
+    let mut child = spawn_shell_command(trimmed_command, &workspace)?;
+    let pid = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    {
+        let mut runs = registry
+            .runs
+            .lock()
+            .map_err(|_| "Failed to lock running command registry.".to_string())?;
+        runs.insert(
+            run_id.clone(),
+            RunningProcess {
+                pid,
+                cancellation_requested: false,
+            },
+        );
+    }
+
+    emit_workspace_event(
+        &app,
+        WorkspaceCommandEventPayload {
+            run_id: run_id.clone(),
+            command: trimmed_command.into(),
+            kind: "started".into(),
+            line: None,
+            success: None,
+            exit_code: None,
+            duration_ms: None,
+            message: Some("Process started.".into()),
+        },
+    );
+
+    if let Some(stdout_reader) = stdout {
+        spawn_output_reader(app.clone(), run_id.clone(), trimmed_command.into(), "stdout", stdout_reader);
+    }
+
+    if let Some(stderr_reader) = stderr {
+        spawn_output_reader(app.clone(), run_id.clone(), trimmed_command.into(), "stderr", stderr_reader);
+    }
+
+    let registry_clone = registry.inner().clone();
+    let app_clone = app.clone();
+    let command_copy = trimmed_command.to_string();
+    let run_id_copy = run_id.clone();
+
+    thread::spawn(move || {
+        let wait_result = child.wait();
+        let duration_ms = started_at.elapsed().as_millis();
+        let cancelled = registry_clone
+            .runs
+            .lock()
+            .ok()
+            .and_then(|mut runs| runs.remove(&run_id_copy))
+            .map(|process| process.cancellation_requested)
+            .unwrap_or(false);
+
+        match wait_result {
+            Ok(status) => {
+                let exit_code = status.code().unwrap_or(-1);
+                let was_success = status.success() && !cancelled;
+                let kind = if cancelled { "cancelled" } else { "completed" };
+                emit_workspace_event(
+                    &app_clone,
+                    WorkspaceCommandEventPayload {
+                        run_id: run_id_copy,
+                        command: command_copy,
+                        kind: kind.into(),
+                        line: None,
+                        success: Some(was_success),
+                        exit_code: Some(exit_code),
+                        duration_ms: Some(duration_ms),
+                        message: Some(if cancelled {
+                            "Process cancelled by user.".into()
+                        } else {
+                            "Process finished.".into()
+                        }),
+                    },
+                );
+            }
+            Err(error) => {
+                emit_workspace_event(
+                    &app_clone,
+                    WorkspaceCommandEventPayload {
+                        run_id: run_id_copy,
+                        command: command_copy,
+                        kind: "launch-failed".into(),
+                        line: None,
+                        success: Some(false),
+                        exit_code: Some(-1),
+                        duration_ms: Some(duration_ms),
+                        message: Some(format!("Process wait failed: {}", error)),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(WorkspaceCommandStarted {
+        run_id,
+        command: trimmed_command.into(),
+    })
+}
+
+#[tauri::command]
+fn cancel_workspace_command(
+    registry: State<CommandRegistry>,
+    run_id: String,
+) -> Result<bool, String> {
+    let pid = {
+        let mut runs = registry
+            .runs
+            .lock()
+            .map_err(|_| "Failed to lock running command registry.".to_string())?;
+
+        if let Some(process) = runs.get_mut(&run_id) {
+            process.cancellation_requested = true;
+            process.pid
+        } else {
+            return Ok(false);
+        }
+    };
+
+    terminate_process(pid)?;
+    Ok(true)
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
@@ -282,6 +460,10 @@ fn pick_initial_file(files: &[String]) -> Option<String> {
     files.first().cloned()
 }
 
+fn next_run_id() -> String {
+    format!("cmd-{:06}", NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed))
+}
+
 fn validate_allowed_command(command: &str) -> Result<(), String> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
@@ -334,6 +516,7 @@ fn validate_allowed_command(command: &str) -> Result<(), String> {
             | "pwd"
             | "ls"
             | "dir"
+            | "echo"
     );
 
     if allowed {
@@ -353,8 +536,96 @@ fn validate_allowed_command(command: &str) -> Result<(), String> {
     Err("Command is not allowed by the desktop shell safety policy.".into())
 }
 
+fn spawn_output_reader<R>(
+    app: AppHandle,
+    run_id: String,
+    command: String,
+    kind: &str,
+    reader: R,
+) where
+    R: Read + Send + 'static,
+{
+    let stream_kind = kind.to_string();
+
+    thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+
+        for line in buffered.lines() {
+            match line {
+                Ok(content) => {
+                    emit_workspace_event(
+                        &app,
+                        WorkspaceCommandEventPayload {
+                            run_id: run_id.clone(),
+                            command: command.clone(),
+                            kind: stream_kind.clone(),
+                            line: Some(normalize_line_endings(content)),
+                            success: None,
+                            exit_code: None,
+                            duration_ms: None,
+                            message: None,
+                        },
+                    );
+                }
+                Err(error) => {
+                    emit_workspace_event(
+                        &app,
+                        WorkspaceCommandEventPayload {
+                            run_id: run_id.clone(),
+                            command: command.clone(),
+                            kind: "launch-failed".into(),
+                            line: None,
+                            success: Some(false),
+                            exit_code: Some(-1),
+                            duration_ms: None,
+                            message: Some(format!("Failed to read command output: {}", error)),
+                        },
+                    );
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn emit_workspace_event(app: &AppHandle, payload: WorkspaceCommandEventPayload) {
+    let _ = app.emit("workspace-command", payload);
+}
+
 #[cfg(target_os = "windows")]
-fn run_shell_command(command: &str, working_directory: &Path) -> Result<std::process::Output, String> {
+fn spawn_shell_command(command: &str, working_directory: &Path) -> Result<Child, String> {
+    let attempted_shells = ["pwsh", "powershell"];
+    let mut last_error: Option<String> = None;
+
+    for shell in attempted_shells {
+        match Command::new(shell)
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command])
+            .current_dir(working_directory)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => return Ok(child),
+            Err(error) => last_error = Some(format!("{}: {}", shell, error)),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "No supported shell was available.".into()))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_shell_command(command: &str, working_directory: &Path) -> Result<Child, String> {
+    Command::new("sh")
+        .args(["-lc", command])
+        .current_dir(working_directory)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to launch shell command '{}': {}", command, error))
+}
+
+#[cfg(target_os = "windows")]
+fn run_blocking_shell_command(command: &str, working_directory: &Path) -> Result<Output, String> {
     let attempted_shells = ["pwsh", "powershell"];
     let mut last_error: Option<String> = None;
 
@@ -373,12 +644,40 @@ fn run_shell_command(command: &str, working_directory: &Path) -> Result<std::pro
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_shell_command(command: &str, working_directory: &Path) -> Result<std::process::Output, String> {
+fn run_blocking_shell_command(command: &str, working_directory: &Path) -> Result<Output, String> {
     Command::new("sh")
         .args(["-lc", command])
         .current_dir(working_directory)
         .output()
         .map_err(|error| format!("Failed to launch shell command '{}': {}", command, error))
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .map_err(|error| format!("Failed to cancel process {}: {}", pid, error))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Process {} could not be cancelled.", pid))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let status = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .map_err(|error| format!("Failed to cancel process {}: {}", pid, error))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Process {} could not be cancelled.", pid))
+    }
 }
 
 fn normalize_line_endings(value: String) -> String {
@@ -387,12 +686,15 @@ fn normalize_line_endings(value: String) -> String {
 
 fn main() {
     tauri::Builder::default()
+        .manage(CommandRegistry::default())
         .invoke_handler(tauri::generate_handler![
             shell_health,
             workspace_snapshot,
             read_workspace_file,
             write_workspace_file,
-            run_workspace_command
+            run_workspace_command,
+            start_workspace_command,
+            cancel_workspace_command
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OpenGravity desktop shell");
@@ -400,7 +702,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_initial_file, sanitize_relative_path, validate_allowed_command};
+    use super::{next_run_id, pick_initial_file, sanitize_relative_path, validate_allowed_command};
 
     #[test]
     fn picks_preferred_workspace_file() {
@@ -426,8 +728,18 @@ mod tests {
     fn validates_safe_commands() {
         assert!(validate_allowed_command("npm run test").is_ok());
         assert!(validate_allowed_command("git status --short").is_ok());
+        assert!(validate_allowed_command("echo hello").is_ok());
         assert!(validate_allowed_command("git reset --hard").is_err());
         assert!(validate_allowed_command("npm run test && git status").is_err());
         assert!(validate_allowed_command("rm -rf build").is_err());
+    }
+
+    #[test]
+    fn creates_unique_run_ids() {
+        let first = next_run_id();
+        let second = next_run_id();
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("cmd-"));
     }
 }

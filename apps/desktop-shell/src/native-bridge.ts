@@ -19,6 +19,22 @@ export interface WorkspaceCommandResult {
   durationMs: number;
 }
 
+export interface WorkspaceCommandStarted {
+  runId: string;
+  command: string;
+}
+
+export interface WorkspaceCommandEventPayload {
+  runId: string;
+  command: string;
+  kind: "started" | "stdout" | "stderr" | "completed" | "cancelled" | "launch-failed";
+  line?: string;
+  success?: boolean;
+  exitCode?: number;
+  durationMs?: number;
+  message?: string;
+}
+
 const browserFallbackFile = "apps/desktop-shell/src/App.tsx";
 
 const browserFallbackContent = `export default function App() {
@@ -85,5 +101,27 @@ export async function runWorkspaceCommand(command: string): Promise<WorkspaceCom
       stderr: "Native command execution is unavailable in browser preview mode.",
       durationMs: 0
     };
+  }
+}
+
+export async function startWorkspaceCommand(command: string): Promise<WorkspaceCommandStarted> {
+  return invokeCommand<WorkspaceCommandStarted>("start_workspace_command", { command });
+}
+
+export async function cancelWorkspaceCommand(runId: string): Promise<boolean> {
+  return invokeCommand<boolean>("cancel_workspace_command", { runId });
+}
+
+export async function listenToWorkspaceCommands(
+  callback: (payload: WorkspaceCommandEventPayload) => void
+): Promise<() => void> {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<WorkspaceCommandEventPayload>("workspace-command", (event) => {
+      callback(event.payload);
+    });
+    return unlisten;
+  } catch {
+    return () => {};
   }
 }
