@@ -29,7 +29,9 @@ Current shell prototype includes:
 - setup-required state when no provider is configured
 - provider settings overlay for BYOK, active model selection, fallback controls, and multi-account pools
 - Gemini AI Studio keys through the Gemini OpenAI-compatible route
+- Groq keys through the Groq OpenAI-compatible route
 - desktop-safe local persistence for prototype settings
+- workspace-scoped persistence for chat history and workbench layout
 - workspace file loading and saving through Tauri commands
 - external file drag-and-drop with open and save support
 - Monaco editor integration with file-aware language detection
@@ -38,6 +40,8 @@ Current shell prototype includes:
 - live OpenRouter catalog discovery with free-model selection
 - workflow execution tracking for recommended build and repair plans
 - Ask, Planning, and Agent chat modes with mode-safe restrictions
-- OpenAI-compatible chat routing for OpenRouter and custom endpoints
+- quick-connect onboarding for API keys and model selection from the main agent dock
+- parallel agent chat lanes across multiple ready accounts and providers
+- OpenAI-compatible chat routing for Gemini, Groq, OpenRouter, OpenAI, and custom endpoints
 - workbench menu actions plus a customize-layout dialog
 - user-defined local skills for launching external tools

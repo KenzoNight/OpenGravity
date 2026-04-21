@@ -9,6 +9,7 @@ export interface ChatMessage {
   content: string;
   accountLabel?: string;
   modelId?: string;
+  agentRole?: string;
   timestamp: string;
 }
 
@@ -17,21 +18,107 @@ export interface ProviderChatMessage {
   content: string;
 }
 
-let nextMessageId = 1;
+export interface PersistedChatSession {
+  mode: ChatMode;
+  messages: ChatMessage[];
+}
+
+export const chatHistoryStorageNamespace = "opengravity.chat-history.v1";
+
+const validChatModes = new Set<ChatMode>(["ask", "planning", "agent"]);
+const validChatRoles = new Set<ChatMessageRole>(["user", "assistant", "system"]);
+const defaultChatReadyMessage =
+  "OpenGravity chat is ready. Connect a provider, choose a mode, and start with Ask, Planning, or Agent.";
+
+let nextMessageId = Date.now();
+
+function createMessageId(): string {
+  return `chat-${nextMessageId++}`;
+}
+
+function normalizeChatMode(value: unknown): ChatMode {
+  return typeof value === "string" && validChatModes.has(value as ChatMode) ? (value as ChatMode) : "ask";
+}
+
+function normalizeChatMessage(value: unknown, fallbackIndex: number): ChatMessage | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const input = value as Partial<ChatMessage>;
+  const role =
+    typeof input.role === "string" && validChatRoles.has(input.role as ChatMessageRole)
+      ? (input.role as ChatMessageRole)
+      : "assistant";
+  const content = typeof input.content === "string" ? input.content.trim() : "";
+  if (!content) {
+    return null;
+  }
+
+  return {
+    id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : `chat-restored-${fallbackIndex}`,
+    role,
+    content,
+    accountLabel: typeof input.accountLabel === "string" ? input.accountLabel.trim() : undefined,
+    modelId: typeof input.modelId === "string" ? input.modelId.trim() : undefined,
+    agentRole: typeof input.agentRole === "string" ? input.agentRole.trim() : undefined,
+    timestamp: typeof input.timestamp === "string" && input.timestamp.trim() ? input.timestamp : new Date().toISOString()
+  };
+}
 
 export function createChatMessage(
   role: ChatMessageRole,
   content: string,
-  metadata: Partial<Pick<ChatMessage, "accountLabel" | "modelId" | "timestamp">> = {}
+  metadata: Partial<Pick<ChatMessage, "accountLabel" | "agentRole" | "modelId" | "timestamp">> = {}
 ): ChatMessage {
   return {
-    id: `chat-${nextMessageId++}`,
+    id: createMessageId(),
     role,
     content,
     accountLabel: metadata.accountLabel,
     modelId: metadata.modelId,
+    agentRole: metadata.agentRole,
     timestamp: metadata.timestamp ?? new Date().toISOString()
   };
+}
+
+export function createInitialChatMessages(): ChatMessage[] {
+  return [createChatMessage("system", defaultChatReadyMessage)];
+}
+
+export function createDefaultChatSession(): PersistedChatSession {
+  return {
+    mode: "ask",
+    messages: createInitialChatMessages()
+  };
+}
+
+export function getChatHistoryStorageKey(workspaceRoot: string): string {
+  const normalizedWorkspaceRoot = workspaceRoot.trim() || "global";
+  return `${chatHistoryStorageNamespace}:${encodeURIComponent(normalizedWorkspaceRoot.toLowerCase())}`;
+}
+
+export function normalizePersistedChatSession(input: unknown): PersistedChatSession {
+  const defaults = createDefaultChatSession();
+  if (!input || typeof input !== "object") {
+    return defaults;
+  }
+
+  const value = input as Partial<PersistedChatSession>;
+  const normalizedMessages = Array.isArray(value.messages)
+    ? value.messages
+        .map((message, index) => normalizeChatMessage(message, index))
+        .filter((message): message is ChatMessage => Boolean(message))
+    : [];
+
+  return {
+    mode: normalizeChatMode(value.mode),
+    messages: normalizedMessages.length > 0 ? normalizedMessages : defaults.messages
+  };
+}
+
+export function serializePersistedChatSession(session: PersistedChatSession): string {
+  return JSON.stringify(session);
 }
 
 export function getChatModeDescription(mode: ChatMode): string {

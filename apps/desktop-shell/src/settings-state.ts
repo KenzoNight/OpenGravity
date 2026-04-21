@@ -23,6 +23,8 @@ export interface ProviderProfile {
 export interface WorkbenchSettings {
   activeModelId: string;
   autoHandoff: boolean;
+  parallelAgentMode: boolean;
+  concurrentAgentCount: number;
   providerProfiles: ProviderProfile[];
   providerAccounts: ProviderAccount[];
 }
@@ -211,6 +213,8 @@ export function createDefaultWorkbenchSettings(models: ModelDescriptor[]): Workb
   return {
     activeModelId,
     autoHandoff: true,
+    parallelAgentMode: true,
+    concurrentAgentCount: 3,
     providerProfiles,
     providerAccounts
   };
@@ -361,6 +365,15 @@ export function normalizeWorkbenchSettings(input: unknown, models: ModelDescript
   return {
     activeModelId,
     autoHandoff: typeof value.autoHandoff === "boolean" ? value.autoHandoff : defaults.autoHandoff,
+    parallelAgentMode:
+      typeof value.parallelAgentMode === "boolean" ? value.parallelAgentMode : defaults.parallelAgentMode,
+    concurrentAgentCount:
+      typeof value.concurrentAgentCount === "number" &&
+      Number.isFinite(value.concurrentAgentCount) &&
+      value.concurrentAgentCount >= 1 &&
+      value.concurrentAgentCount <= 6
+        ? Math.trunc(value.concurrentAgentCount)
+        : defaults.concurrentAgentCount,
     providerProfiles: normalizedProfiles,
     providerAccounts
   };

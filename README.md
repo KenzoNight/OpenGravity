@@ -51,8 +51,11 @@ Current status:
 - desktop shell includes a real Tauri workspace file bridge and command bridge
 - provider settings now support multi-account BYOK routing for the same provider
 - Gemini AI Studio keys now work through the desktop shell's OpenAI-compatible Gemini route
+- Groq keys now work through the desktop shell's OpenAI-compatible Groq route
 - recommended execution plans can now run step-by-step from the desktop shell with tracked workflow state
 - Ask, Planning, and Agent chat modes now exist with mode-safe behavior
+- quick provider onboarding, quick model switching, workspace-scoped chat history, and persisted workbench layout now exist
+- Agent mode can now fan out to multiple accounts and providers at the same time through parallel chat lanes
 - external file drag-and-drop and user-defined local skill launching now exist in the desktop shell
 - desktop workbench menus and customize-layout controls now exist as part of the shell
 - production-ready secret storage, richer agent execution, and deeper terminal/runtime integration are still in progress
@@ -142,7 +145,10 @@ Already implemented:
 - xterm-based terminal sessions with live command output and run switching
 - live OpenRouter catalog discovery with current free-model filtering
 - mode-safe chat for Ask, Planning, and Agent flows
-- OpenAI-compatible chat routing for OpenRouter and custom endpoints
+- OpenAI-compatible chat routing for Gemini, Groq, OpenRouter, OpenAI, and custom endpoints
+- quick-connect onboarding for API keys, model selection, and multi-account routing
+- workspace-scoped persistence for chat history and workbench layout
+- parallel agent chat lanes with role-based responses
 - user-defined local skills for launching external tools such as reverse engineering utilities
 
 Not finished yet:

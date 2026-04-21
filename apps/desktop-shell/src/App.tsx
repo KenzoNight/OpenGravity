@@ -70,9 +70,13 @@ import {
 import {
   buildProviderChatMessages,
   canRunAgentWorkflow,
+  createDefaultChatSession,
   createChatMessage,
+  getChatHistoryStorageKey,
   getChatComposerPlaceholder,
   getChatModeDescription,
+  normalizePersistedChatSession,
+  serializePersistedChatSession,
   type ChatMessage,
   type ChatMode
 } from "./chat-state";
@@ -82,6 +86,10 @@ import {
   type ProviderCatalogSnapshot
 } from "./provider-catalog";
 import { sendCompatibleChatCompletion } from "./openrouter-chat";
+import {
+  buildParallelAgentTargets,
+  decorateMessagesForParallelTarget
+} from "./multiagent-state";
 import {
   addLocalSkill,
   normalizeLocalSkills,
@@ -124,6 +132,16 @@ import {
   type TerminalSession
 } from "./terminal-state";
 import {
+  createDefaultWorkbenchUiState,
+  normalizeWorkbenchUiState,
+  serializeWorkbenchUiState,
+  workbenchUiStorageKey,
+  type WorkbenchBottomView,
+  type WorkbenchPrimaryView,
+  type WorkbenchSettingsView,
+  type WorkbenchSideView
+} from "./workbench-ui-state";
+import {
   applyWorkflowCommandResult,
   applyWorkflowEvent,
   cancelWorkflowRun,
@@ -143,11 +161,7 @@ declare global {
   }
 }
 
-type SideView = "overview" | "handoff" | "artifacts" | "runtime";
-type BottomView = "build" | "tasks" | "events" | "log" | "terminal";
-type SettingsView = "providers" | "skills" | "integrations";
 type MenuId = "file" | "edit" | "selection" | "view" | "go" | "run" | "terminal" | "help";
-type PrimaryView = "source-control" | "explorer" | "agents" | "workflows" | "artifacts" | "search";
 
 interface ExplorerGroup {
   label: string;
@@ -165,7 +179,7 @@ const menuItems: Array<{ id: MenuId; label: string }> = [
   { id: "help", label: "Help" }
 ];
 
-const activityItems: Array<{ id: PrimaryView; shortLabel: string; label: string }> = [
+const activityItems: Array<{ id: WorkbenchPrimaryView; shortLabel: string; label: string }> = [
   { id: "source-control", shortLabel: "SC", label: "Source Control" },
   { id: "explorer", shortLabel: "EX", label: "Explorer" },
   { id: "agents", shortLabel: "AG", label: "Agents" },
@@ -236,6 +250,24 @@ function loadIntegrationSettings(): IntegrationSettings {
     }
 
     return normalizeIntegrationSettings(JSON.parse(rawValue));
+  } catch {
+    return defaults;
+  }
+}
+
+function loadWorkbenchUiState() {
+  const defaults = createDefaultWorkbenchUiState();
+  if (typeof window === "undefined" || !window.localStorage) {
+    return defaults;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(workbenchUiStorageKey);
+    if (!rawValue) {
+      return defaults;
+    }
+
+    return normalizeWorkbenchUiState(JSON.parse(rawValue));
   } catch {
     return defaults;
   }
@@ -352,18 +384,18 @@ export default function App() {
     createWorkspaceDocument(browserFallbackWorkspace.activeFilePath, browserFallbackWorkspace.activeFileContent)
   ]);
   const [openMenuId, setOpenMenuId] = useState<MenuId | null>(null);
-  const [primaryView, setPrimaryView] = useState<PrimaryView>("explorer");
-  const [sideView, setSideView] = useState<SideView>("overview");
-  const [bottomView, setBottomView] = useState<BottomView>("terminal");
-  const [bottomOpen, setBottomOpen] = useState(false);
-  const [activityBarOpen, setActivityBarOpen] = useState(true);
-  const [explorerOpen, setExplorerOpen] = useState(true);
-  const [dockOpen, setDockOpen] = useState(true);
-  const [statusBarOpen, setStatusBarOpen] = useState(true);
+  const [primaryView, setPrimaryView] = useState<WorkbenchPrimaryView>(() => loadWorkbenchUiState().primaryView);
+  const [sideView, setSideView] = useState<WorkbenchSideView>(() => loadWorkbenchUiState().sideView);
+  const [bottomView, setBottomView] = useState<WorkbenchBottomView>(() => loadWorkbenchUiState().bottomView);
+  const [bottomOpen, setBottomOpen] = useState(() => loadWorkbenchUiState().bottomOpen);
+  const [activityBarOpen, setActivityBarOpen] = useState(() => loadWorkbenchUiState().activityBarOpen);
+  const [explorerOpen, setExplorerOpen] = useState(() => loadWorkbenchUiState().explorerOpen);
+  const [dockOpen, setDockOpen] = useState(() => loadWorkbenchUiState().dockOpen);
+  const [statusBarOpen, setStatusBarOpen] = useState(() => loadWorkbenchUiState().statusBarOpen);
   const [layoutOpen, setLayoutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsView, setSettingsView] = useState<SettingsView>("providers");
-  const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("anthropic");
+  const [settingsView, setSettingsView] = useState<WorkbenchSettingsView>(() => loadWorkbenchUiState().settingsView);
+  const [selectedProvider, setSelectedProvider] = useState<ModelProvider>(() => loadWorkbenchUiState().selectedProvider);
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [selectedSkillId, setSelectedSkillId] = useState<string>("");
   const [skills, setSkills] = useState<LocalSkill[]>(() => loadLocalSkills());
@@ -377,24 +409,25 @@ export default function App() {
   const [openRouterCatalog, setOpenRouterCatalog] = useState<ProviderCatalogSnapshot | null>(null);
   const [providerCatalogBusy, setProviderCatalogBusy] = useState<ModelProvider | null>(null);
   const [providerCatalogError, setProviderCatalogError] = useState<string | null>(null);
-  const [agentDetailsOpen, setAgentDetailsOpen] = useState(false);
+  const [agentDetailsOpen, setAgentDetailsOpen] = useState(() => loadWorkbenchUiState().agentDetailsOpen);
   const [repositoryBusy, setRepositoryBusy] = useState(false);
   const [githubBusy, setGithubBusy] = useState(false);
   const [githubError, setGithubError] = useState<string | null>(null);
   const [githubSignals, setGithubSignals] = useState<GitHubRepositorySignals | null>(null);
-  const [chatMode, setChatMode] = useState<ChatMode>("ask");
+  const [chatMode, setChatMode] = useState<ChatMode>(() => createDefaultChatSession().mode);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    createChatMessage(
-      "system",
-      "OpenGravity chat is ready. Connect a provider, choose a mode, and start with Ask, Planning, or Agent."
-    )
-  ]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => createDefaultChatSession().messages);
+  const [chatHistoryReady, setChatHistoryReady] = useState(false);
+  const [loadedChatHistoryKey, setLoadedChatHistoryKey] = useState("");
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowDispatchBusy, setWorkflowDispatchBusy] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
   const [explorerQuery, setExplorerQuery] = useState("");
+  const chatHistoryKey = useMemo(
+    () => getChatHistoryStorageKey(workspace.rootPath || browserFallbackWorkspace.rootPath),
+    [workspace.rootPath]
+  );
 
   useEffect(() => {
     void loadShellHealth().then((nextHealth) => {
@@ -472,8 +505,85 @@ export default function App() {
   }, [integrations]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      workbenchUiStorageKey,
+      serializeWorkbenchUiState({
+        activityBarOpen,
+        agentDetailsOpen,
+        bottomOpen,
+        bottomView,
+        dockOpen,
+        explorerOpen,
+        primaryView,
+        selectedProvider,
+        settingsView,
+        sideView,
+        statusBarOpen
+      })
+    );
+  }, [
+    activityBarOpen,
+    agentDetailsOpen,
+    bottomOpen,
+    bottomView,
+    dockOpen,
+    explorerOpen,
+    primaryView,
+    selectedProvider,
+    settingsView,
+    sideView,
+    statusBarOpen
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      setChatHistoryReady(true);
+      setLoadedChatHistoryKey(chatHistoryKey);
+      return;
+    }
+
+    try {
+      const rawValue = window.localStorage.getItem(chatHistoryKey);
+      const session = rawValue ? normalizePersistedChatSession(JSON.parse(rawValue)) : createDefaultChatSession();
+      setChatMode(session.mode);
+      setChatMessages(session.messages);
+      setLoadedChatHistoryKey(chatHistoryKey);
+    } catch {
+      const fallbackSession = createDefaultChatSession();
+      setChatMode(fallbackSession.mode);
+      setChatMessages(fallbackSession.messages);
+      setLoadedChatHistoryKey(chatHistoryKey);
+    } finally {
+      setChatHistoryReady(true);
+    }
+  }, [chatHistoryKey]);
+
+  useEffect(() => {
+    if (
+      !chatHistoryReady ||
+      loadedChatHistoryKey !== chatHistoryKey ||
+      typeof window === "undefined" ||
+      !window.localStorage
+    ) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      chatHistoryKey,
+      serializePersistedChatSession({
+        mode: chatMode,
+        messages: chatMessages
+      })
+    );
+  }, [chatHistoryKey, chatHistoryReady, chatMessages, chatMode, loadedChatHistoryKey]);
+
+  useEffect(() => {
     if (!settings.providerProfiles.some((profile) => profile.provider === selectedProvider)) {
-      setSelectedProvider(settings.providerProfiles[0]?.provider ?? "anthropic");
+      setSelectedProvider(settings.providerProfiles[0]?.provider ?? "gemini");
     }
   }, [selectedProvider, settings.providerProfiles]);
 
@@ -557,6 +667,12 @@ export default function App() {
     [settings]
   );
   const selectedProfile = settings.providerProfiles.find((profile) => profile.provider === selectedProvider) ?? settings.providerProfiles[0];
+  const compatibleChatProfiles = useMemo(
+    () => settings.providerProfiles.filter((profile) => isCompatibleChatProvider(profile.provider)),
+    [settings.providerProfiles]
+  );
+  const selectedChatProfile =
+    compatibleChatProfiles.find((profile) => profile.provider === selectedProvider) ?? compatibleChatProfiles[0];
   const selectedProviderModels = selectedProfile ? getModelsForProvider(snapshot.models, selectedProfile.provider) : [];
   const selectedProviderAccounts = selectedProfile ? getProviderAccounts(settings, selectedProfile.provider) : [];
   const selectedPrimaryAccount = selectedProfile
@@ -589,8 +705,8 @@ export default function App() {
   const chatProfile =
     activeChatProfile && isCompatibleChatProvider(activeChatProfile.provider)
       ? activeChatProfile
-      : selectedProfile && isCompatibleChatProvider(selectedProfile.provider)
-        ? selectedProfile
+      : selectedChatProfile && isCompatibleChatProvider(selectedChatProfile.provider)
+        ? selectedChatProfile
         : fallbackChatProfile;
   const chatAccounts = chatProfile ? getReadyProviderAccounts(settings, chatProfile.provider) : [];
   const chatModelId =
@@ -598,6 +714,19 @@ export default function App() {
       ? activeLiveModel.id
       : chatProfile?.preferredModelId ?? "";
   const chatProviderLabel = chatProfile?.label ?? "Provider";
+  const quickSetupProfile = selectedChatProfile;
+  const quickSetupAccounts = quickSetupProfile ? getProviderAccounts(settings, quickSetupProfile.provider) : [];
+  const quickSetupModels = quickSetupProfile ? getModelsForProvider(snapshot.models, quickSetupProfile.provider) : [];
+  const quickSetupAccount =
+    quickSetupAccounts.find((account) => account.id === selectedAccountId) ??
+    (quickSetupProfile ? getPrimaryProviderAccount(settings, quickSetupProfile.provider) : undefined) ??
+    quickSetupAccounts[0];
+  const showQuickBaseUrl = Boolean(
+    quickSetupProfile &&
+      (quickSetupProfile.provider === "custom" ||
+        quickSetupProfile.provider === "openrouter" ||
+        quickSetupProfile.provider === "ollama")
+  );
   const activeDocument = getWorkspaceDocument(openDocuments, activeFilePath);
   const activeDocumentLanguage = detectEditorLanguage(activeFilePath);
   const activeDocumentLanguageLabel = formatEditorLanguageLabel(activeDocumentLanguage);
@@ -1370,6 +1499,90 @@ export default function App() {
     setWorkspaceNotice(`${selectedAccount.label} is now the primary ${selectedProfile.label} account.`);
   };
 
+  const updateQuickConnectProfile = (
+    patch: Partial<Omit<ProviderProfile, "provider" | "label">>
+  ) => {
+    if (!quickSetupProfile) {
+      return;
+    }
+
+    setSettings((current) => updateProviderProfile(current, quickSetupProfile.provider, patch, snapshot.models));
+  };
+
+  const updateQuickConnectAccount = (
+    patch: Partial<Omit<ProviderAccount, "id" | "provider">>
+  ) => {
+    if (!quickSetupAccount) {
+      return;
+    }
+
+    setSettings((current) => updateProviderAccount(current, quickSetupAccount.id, patch, snapshot.models));
+  };
+
+  const handleQuickConnectModelChange = (modelId: string) => {
+    if (!quickSetupProfile) {
+      return;
+    }
+
+    setSettings((current) => {
+      const next = updateProviderProfile(
+        current,
+        quickSetupProfile.provider,
+        {
+          enabled: true,
+          preferredModelId: modelId
+        },
+        snapshot.models
+      );
+      return setActiveModel(next, modelId, snapshot.models);
+    });
+  };
+
+  const handleQuickConnectProvider = (provider: ModelProvider) => {
+    setSelectedProvider(provider);
+    setSettingsView("providers");
+  };
+
+  const handleQuickConnectReady = () => {
+    if (!quickSetupProfile || !quickSetupAccount) {
+      return;
+    }
+
+    setSettings((current) => {
+      let next = updateProviderProfile(
+        current,
+        quickSetupProfile.provider,
+        {
+          enabled: true
+        },
+        snapshot.models
+      );
+      next = updateProviderAccount(
+        next,
+        quickSetupAccount.id,
+        {
+          enabled: true
+        },
+        snapshot.models
+      );
+
+      if (quickSetupProfile.preferredModelId.trim()) {
+        next = setActiveModel(next, quickSetupProfile.preferredModelId, snapshot.models);
+      }
+
+      return next;
+    });
+
+    setWorkspaceNotice(`${quickSetupProfile.label} is ready and saved locally for this workspace.`);
+  };
+
+  const handleClearChatHistory = () => {
+    const nextSession = createDefaultChatSession();
+    setChatMode(nextSession.mode);
+    setChatMessages(nextSession.messages);
+    setWorkspaceNotice("Cleared chat history for this workspace.");
+  };
+
   const handleLaunchSkill = async () => {
     if (!selectedSkill) {
       return;
@@ -1430,32 +1643,104 @@ export default function App() {
     }
 
     try {
-      const response = await sendCompatibleChatCompletion({
-        accounts: chatAccounts,
-        messages: buildProviderChatMessages(
-          chatMode,
-          snapshot,
-          activeFilePath,
-          activeDocument?.currentContent ?? "",
-          chatMessages,
-          prompt
-        ),
-        mode: chatMode,
-        modelId: chatModelId,
-        provider: chatProfile.provider,
-        sessionId: snapshot.sessionId
-      });
+      const baseMessages = buildProviderChatMessages(
+        chatMode,
+        snapshot,
+        activeFilePath,
+        activeDocument?.currentContent ?? "",
+        chatMessages,
+        prompt
+      );
+      const parallelTargets =
+        chatMode === "agent" && settings.parallelAgentMode
+          ? buildParallelAgentTargets({
+              activeModelId: settings.activeModelId,
+              maxCount: settings.concurrentAgentCount,
+              models: snapshot.models,
+              preferredModelId: chatModelId,
+              preferredProvider: chatProfile.provider,
+              settings
+            })
+          : [];
 
-      startTransition(() => {
-        setChatMessages((current) => [
-          ...current,
-          createChatMessage("assistant", response.content, {
-            accountLabel: response.accountLabel,
-            modelId: response.modelId
-          })
-        ]);
-        setWorkspaceNotice(`Chat response received from ${response.accountLabel}.`);
-      });
+      if (parallelTargets.length > 1) {
+        const settled = await Promise.allSettled(
+          parallelTargets.map((target) =>
+            sendCompatibleChatCompletion({
+              accounts: [target.account],
+              messages: decorateMessagesForParallelTarget(baseMessages, target, parallelTargets.length),
+              mode: chatMode,
+              modelId: target.modelId,
+              provider: target.provider,
+              sessionId: snapshot.sessionId
+            })
+          )
+        );
+
+        const nextMessages: ChatMessage[] = [];
+        const failures: string[] = [];
+
+        settled.forEach((result, index) => {
+          const target = parallelTargets[index]!;
+          if (result.status === "fulfilled") {
+            nextMessages.push(
+              createChatMessage("assistant", result.value.content, {
+                accountLabel: `${target.roleLabel} · ${result.value.accountLabel}`,
+                agentRole: target.roleLabel,
+                modelId: result.value.modelId
+              })
+            );
+            return;
+          }
+
+          const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          failures.push(`${target.roleLabel}: ${message}`);
+        });
+
+        if (failures.length > 0) {
+          nextMessages.push(
+            createChatMessage(
+              "assistant",
+              failures.length === parallelTargets.length
+                ? `Every parallel agent lane failed.\n\n${failures.join("\n")}`
+                : `Some agent lanes failed.\n\n${failures.join("\n")}`,
+              {
+                accountLabel: "OpenGravity runtime",
+                agentRole: "Runtime"
+              }
+            )
+          );
+        }
+
+        startTransition(() => {
+          setChatMessages((current) => [...current, ...nextMessages]);
+          setWorkspaceNotice(
+            nextMessages.length > 0
+              ? `Parallel agent mode finished ${parallelTargets.length} lanes.`
+              : "Parallel agent mode failed across all lanes."
+          );
+        });
+      } else {
+        const response = await sendCompatibleChatCompletion({
+          accounts: chatAccounts,
+          messages: baseMessages,
+          mode: chatMode,
+          modelId: chatModelId,
+          provider: chatProfile.provider,
+          sessionId: snapshot.sessionId
+        });
+
+        startTransition(() => {
+          setChatMessages((current) => [
+            ...current,
+            createChatMessage("assistant", response.content, {
+              accountLabel: response.accountLabel,
+              modelId: response.modelId
+            })
+          ]);
+          setWorkspaceNotice(`Chat response received from ${response.accountLabel}.`);
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Chat request failed.";
       startTransition(() => {
@@ -2305,6 +2590,203 @@ export default function App() {
 
                 <p className="composer-summary">{getChatModeDescription(chatMode)}</p>
 
+                <div className="chat-toolbar-grid">
+                  <div className="chat-toolbar-field">
+                    <span className="field-label">Provider</span>
+                    <select
+                      className="settings-input chat-compact-input"
+                      onChange={(event) => handleQuickConnectProvider(event.target.value as ModelProvider)}
+                      value={quickSetupProfile?.provider ?? ""}
+                    >
+                      {compatibleChatProfiles.map((profile) => (
+                        <option key={profile.provider} value={profile.provider}>
+                          {profile.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="chat-toolbar-field">
+                    <span className="field-label">Model</span>
+                    <select
+                      className="settings-input chat-compact-input"
+                      disabled={!quickSetupProfile || quickSetupModels.length === 0}
+                      onChange={(event) => handleQuickConnectModelChange(event.target.value)}
+                      value={quickSetupProfile?.preferredModelId ?? ""}
+                    >
+                      {quickSetupModels.length === 0 ? <option value="">No models available</option> : null}
+                      {quickSetupModels.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="chat-toolbar-field">
+                    <span className="field-label">Account</span>
+                    <div className="chat-toolbar-inline">
+                      <select
+                        className="settings-input chat-compact-input"
+                        disabled={!quickSetupProfile || quickSetupAccounts.length === 0}
+                        onChange={(event) => setSelectedAccountId(event.target.value)}
+                        value={quickSetupAccount?.id ?? ""}
+                      >
+                        {quickSetupAccounts.length === 0 ? <option value="">No account</option> : null}
+                        {quickSetupAccounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="secondary-button slim-button"
+                        onClick={() => {
+                          if (!quickSetupProfile) {
+                            return;
+                          }
+
+                          setSettings((current) => addProviderAccount(current, quickSetupProfile.provider));
+                          setWorkspaceNotice(`Added another ${quickSetupProfile.label} account.`);
+                        }}
+                        type="button"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="chat-toolbar-actions">
+                  <label className="toggle-row compact-toggle">
+                    <input
+                      checked={settings.autoHandoff}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          autoHandoff: event.target.checked
+                        }))
+                      }
+                      type="checkbox"
+                    />
+                    <span>Auto handoff</span>
+                  </label>
+
+                  <label className="toggle-row compact-toggle">
+                    <input
+                      checked={settings.parallelAgentMode}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          parallelAgentMode: event.target.checked
+                        }))
+                      }
+                      type="checkbox"
+                    />
+                    <span>Parallel agents</span>
+                  </label>
+
+                  <select
+                    className="settings-input chat-mini-select"
+                    disabled={!settings.parallelAgentMode}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        concurrentAgentCount: Number.parseInt(event.target.value, 10) || 1
+                      }))
+                    }
+                    value={String(settings.concurrentAgentCount)}
+                  >
+                    {[1, 2, 3, 4, 5, 6].map((count) => (
+                      <option key={count} value={count}>
+                        {count} lane{count === 1 ? "" : "s"}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button className="secondary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
+                    Settings
+                  </button>
+                  <button className="secondary-button slim-button" onClick={() => handleClearChatHistory()} type="button">
+                    Clear history
+                  </button>
+                </div>
+
+                {!quickSetupProfile ||
+                getProviderConnectionState(quickSetupProfile, settings) !== "ready" ||
+                !quickSetupAccount?.apiKey.trim() ? (
+                  <div className="quick-connect-card">
+                    <div className="settings-section-headline">
+                      <div>
+                        <div className="settings-provider-title">Quick Connect</div>
+                        <div className="settings-provider-copy">
+                          Paste a key, pick a model, and OpenGravity will save it locally on this machine.
+                        </div>
+                      </div>
+                      <span className={`state-pill ${quickSetupProfile ? connectionTone(quickSetupProfile, settings) : "is-waiting"}`}>
+                        {quickSetupProfile ? getProviderConnectionLabel(quickSetupProfile, settings) : "No provider"}
+                      </span>
+                    </div>
+
+                    <div className="settings-field">
+                      <label className="field-label" htmlFor="quick-connect-key">
+                        API key
+                      </label>
+                      <div className="secret-row">
+                        <input
+                          id="quick-connect-key"
+                          className="settings-input"
+                          onChange={(event) => updateQuickConnectAccount({ apiKey: event.target.value, enabled: true })}
+                          placeholder={
+                            quickSetupProfile
+                              ? `Paste the ${quickSetupProfile.label} API key for ${quickSetupAccount?.label ?? "this account"}`
+                              : "Paste an API key"
+                          }
+                          type={visibleSecrets.quickConnect ? "text" : "password"}
+                          value={quickSetupAccount?.apiKey ?? ""}
+                        />
+                        <button
+                          className="secondary-button"
+                          onClick={() =>
+                            setVisibleSecrets((current) => ({
+                              ...current,
+                              quickConnect: !current.quickConnect
+                            }))
+                          }
+                          type="button"
+                        >
+                          {visibleSecrets.quickConnect ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                      <div className="field-help">Saved locally as you type. Nothing is committed to the repository.</div>
+                    </div>
+
+                    {showQuickBaseUrl && quickSetupProfile ? (
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor="quick-connect-base-url">
+                          Base URL
+                        </label>
+                        <input
+                          id="quick-connect-base-url"
+                          className="settings-input"
+                          onChange={(event) => updateQuickConnectAccount({ baseUrl: event.target.value })}
+                          placeholder="Enter the endpoint base URL"
+                          value={quickSetupAccount?.baseUrl ?? ""}
+                        />
+                      </div>
+                    ) : null}
+
+                    <div className="quick-connect-actions">
+                      <button className="primary-button slim-button" onClick={() => handleQuickConnectReady()} type="button">
+                        Save and connect
+                      </button>
+                      <button className="secondary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
+                        Open full settings
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="chat-history">
                   {chatMessages.map((message) => (
                     <div className={`chat-message is-${message.role}`} key={message.id}>
@@ -2316,6 +2798,7 @@ export default function App() {
                             minute: "2-digit"
                           })}
                         </span>
+                        {message.agentRole ? <span>{message.agentRole}</span> : null}
                         {message.accountLabel ? <span>{message.accountLabel}</span> : null}
                         {message.modelId ? <span>{message.modelId}</span> : null}
                       </div>
@@ -2369,6 +2852,12 @@ export default function App() {
                     {chatAccounts.length > 0
                       ? `${chatAccounts.length} account${chatAccounts.length === 1 ? "" : "s"} ready`
                       : "No provider connected"}
+                  </span>
+                  <span>{chatHistoryReady ? "History saved per workspace" : "Preparing chat history"}</span>
+                  <span>
+                    {settings.parallelAgentMode && chatMode === "agent"
+                      ? `${settings.concurrentAgentCount} parallel lane${settings.concurrentAgentCount === 1 ? "" : "s"}`
+                      : "Single response mode"}
                   </span>
                 </div>
               </div>
