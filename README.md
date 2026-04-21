@@ -48,7 +48,7 @@ Current status:
 
 - early alpha repository
 - core continuity, routing, orchestration, and build-intelligence packages are testable
-- desktop shell exists as an early Tauri-based workbench prototype
+- desktop shell includes a real Tauri workspace file bridge and command bridge
 - provider settings and BYOK routing controls now exist as an early desktop shell prototype
 - production-ready editing, terminal integration, secure secret storage, and command execution are still in progress
 
@@ -128,14 +128,15 @@ Already implemented:
 - session ledger persistence
 - an early native desktop shell
 - an early provider settings and API key management surface
+- workspace file reading and saving through Tauri commands
+- desktop command execution with a guarded allowlist
 
 Not finished yet:
 
 - Monaco editor integration
-- terminal integration
+- rich terminal emulation and live streaming output
 - native secret vault for provider credentials
-- real workspace file editing
-- command execution bridge
+- multi-tab document state and conflict handling
 - full agent manager workflows
 
 ## Documentation

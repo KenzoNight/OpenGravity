@@ -8,6 +8,15 @@ import type {
 } from "@opengravity/shared-types";
 
 import {
+  browserFallbackWorkspace,
+  loadWorkspaceSnapshot,
+  readWorkspaceFile,
+  runWorkspaceCommand,
+  writeWorkspaceFile,
+  type WorkspaceCommandResult,
+  type WorkspaceSnapshotPayload
+} from "./native-bridge";
+import {
   createDefaultWorkbenchSettings,
   getAvailableModelIds,
   getModelsForProvider,
@@ -29,6 +38,21 @@ import {
   desktopShellModels,
   type ShellHealth
 } from "./shell-state";
+import {
+  buildWorkspaceCommandPresets,
+  createEditorTabList,
+  createWorkspaceDocument,
+  filterWorkspaceFiles,
+  getDirtyWorkspaceDocumentCount,
+  getWorkspaceDocument,
+  isDocumentDirty,
+  labelForFilePath,
+  markWorkspaceDocumentSaved,
+  updateWorkspaceDocumentContent,
+  upsertWorkspaceDocument,
+  type WorkspaceDocument,
+  type WorkspaceCommandPreset
+} from "./workspace-state";
 import "./styles.css";
 
 declare global {
@@ -38,7 +62,7 @@ declare global {
 }
 
 type SideView = "overview" | "handoff" | "artifacts" | "runtime";
-type BottomView = "build" | "tasks" | "events" | "log";
+type BottomView = "build" | "tasks" | "events" | "log" | "terminal";
 
 interface ExplorerGroup {
   label: string;
@@ -137,7 +161,9 @@ function buildExplorerGroups(paths: string[]): ExplorerGroup[] {
   const groups = new Map<string, string[]>();
 
   for (const path of paths) {
-    const [head, ...rest] = path.split("/");
+    const parts = path.split("/");
+    const head = parts[0];
+    const rest = parts.slice(1);
     const key = rest.length === 0 ? "root" : head;
     const value = rest.length === 0 ? head : rest.join("/");
     const existing = groups.get(key) ?? [];
@@ -151,21 +177,52 @@ function buildExplorerGroups(paths: string[]): ExplorerGroup[] {
   }));
 }
 
+function formatCommandSummary(result: WorkspaceCommandResult): string {
+  if (result.success) {
+    return `Exit ${result.exitCode} · ${result.durationMs} ms`;
+  }
+
+  return `Failed (${result.exitCode}) · ${result.durationMs} ms`;
+}
+
 export default function App() {
   const [shellHealth, setShellHealth] = useState<ShellHealth>(browserFallbackHealth);
   const [settings, setSettings] = useState<WorkbenchSettings>(() => loadWorkbenchSettings());
+  const [workspace, setWorkspace] = useState<WorkspaceSnapshotPayload>(browserFallbackWorkspace);
+  const [activeFilePath, setActiveFilePath] = useState(browserFallbackWorkspace.activeFilePath);
+  const [openDocuments, setOpenDocuments] = useState<WorkspaceDocument[]>([
+    createWorkspaceDocument(browserFallbackWorkspace.activeFilePath, browserFallbackWorkspace.activeFileContent)
+  ]);
   const [sideView, setSideView] = useState<SideView>("overview");
-  const [bottomView, setBottomView] = useState<BottomView>("build");
-  const [bottomOpen, setBottomOpen] = useState(false);
+  const [bottomView, setBottomView] = useState<BottomView>("terminal");
+  const [bottomOpen, setBottomOpen] = useState(true);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [dockOpen, setDockOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("anthropic");
   const [visibleSecrets, setVisibleSecrets] = useState<Partial<Record<ModelProvider, boolean>>>({});
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [terminalBusy, setTerminalBusy] = useState(false);
+  const [terminalInput, setTerminalInput] = useState("");
+  const [terminalHistory, setTerminalHistory] = useState<WorkspaceCommandResult[]>([]);
+  const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
+  const [explorerQuery, setExplorerQuery] = useState("");
 
   useEffect(() => {
     void loadShellHealth().then((nextHealth) => {
       startTransition(() => setShellHealth(nextHealth));
+    });
+
+    void loadWorkspaceSnapshot().then((nextWorkspace) => {
+      startTransition(() => {
+        setWorkspace(nextWorkspace);
+        setActiveFilePath(nextWorkspace.activeFilePath);
+        setOpenDocuments([
+          createWorkspaceDocument(nextWorkspace.activeFilePath, nextWorkspace.activeFileContent)
+        ]);
+        setWorkspaceNotice(`Loaded ${nextWorkspace.files.length} workspace files.`);
+      });
     });
   }, []);
 
@@ -184,7 +241,16 @@ export default function App() {
   }, [selectedProvider, settings.providerProfiles]);
 
   const snapshot = useMemo(() => buildDesktopShellSnapshot(shellHealth, settings), [shellHealth, settings]);
-  const explorerGroups = useMemo(() => buildExplorerGroups(snapshot.workspaceFiles), [snapshot.workspaceFiles]);
+  const filteredWorkspaceFiles = useMemo(
+    () => filterWorkspaceFiles(workspace.files, explorerQuery),
+    [explorerQuery, workspace.files]
+  );
+  const explorerGroups = useMemo(() => buildExplorerGroups(filteredWorkspaceFiles), [filteredWorkspaceFiles]);
+  const commandPresets = useMemo(() => buildWorkspaceCommandPresets(workspace.files), [workspace.files]);
+  const editorTabs = useMemo(
+    () => createEditorTabList(activeFilePath, openDocuments.map((document) => document.path)),
+    [activeFilePath, openDocuments]
+  );
   const availableModelIds = useMemo(() => new Set(getAvailableModelIds(settings, snapshot.models)), [settings, snapshot.models]);
   const activeLiveModel = useMemo(
     () => snapshot.models.find((model) => model.id === settings.activeModelId && availableModelIds.has(model.id)),
@@ -200,7 +266,11 @@ export default function App() {
   const recentArtifacts = snapshot.sessionRecord.artifacts.slice(-4).reverse();
   const runningTask = snapshot.tasks.find((task) => task.status === "running");
   const activeModelLabel = activeLiveModel?.label ?? "Setup required";
-
+  const activeDocument = getWorkspaceDocument(openDocuments, activeFilePath);
+  const editorDirty = activeDocument
+    ? isDocumentDirty(activeDocument.savedContent, activeDocument.currentContent)
+    : false;
+  const dirtyDocumentCount = getDirtyWorkspaceDocumentCount(openDocuments);
   const workbenchClassName = [
     "workbench",
     !explorerOpen && "is-explorer-collapsed",
@@ -208,6 +278,121 @@ export default function App() {
   ]
     .filter(Boolean)
     .join(" ");
+
+  useEffect(() => {
+    if (!terminalInput && commandPresets[0]) {
+      setTerminalInput(commandPresets[0].command);
+    }
+  }, [commandPresets, terminalInput]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void handleSaveFile();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
+  const loadActiveFile = async (relativePath: string) => {
+    setWorkspaceBusy(true);
+
+    try {
+      const file = await readWorkspaceFile(relativePath);
+      startTransition(() => {
+        setActiveFilePath(file.path);
+        setOpenDocuments((current) =>
+          upsertWorkspaceDocument(current, createWorkspaceDocument(file.path, file.content))
+        );
+        setWorkspaceNotice(`Opened ${file.path}`);
+      });
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleSelectFile = async (relativePath: string) => {
+    if (!relativePath || relativePath === activeFilePath) {
+      return;
+    }
+
+    if (getWorkspaceDocument(openDocuments, relativePath)) {
+      setActiveFilePath(relativePath);
+      setWorkspaceNotice(`Switched to ${relativePath}`);
+      return;
+    }
+
+    await loadActiveFile(relativePath);
+  };
+
+  const handleSaveFile = async () => {
+    if (!activeFilePath) {
+      return;
+    }
+
+    setSaveBusy(true);
+
+    try {
+      const content = activeDocument?.currentContent ?? "";
+      const saved = await writeWorkspaceFile(activeFilePath, content);
+      startTransition(() => {
+        setOpenDocuments((current) => markWorkspaceDocumentSaved(current, saved.path, saved.content));
+        setWorkspaceNotice(`Saved ${saved.path}`);
+      });
+    } finally {
+      setSaveBusy(false);
+    }
+  };
+
+  const handleReloadFile = async () => {
+    if (!activeFilePath) {
+      return;
+    }
+
+    setWorkspaceBusy(true);
+
+    try {
+      const file = await readWorkspaceFile(activeFilePath);
+      startTransition(() => {
+        setOpenDocuments((current) =>
+          upsertWorkspaceDocument(current, createWorkspaceDocument(file.path, file.content))
+        );
+        setWorkspaceNotice(`Reloaded ${file.path}`);
+      });
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleRunCommand = async (command: string) => {
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    setBottomView("terminal");
+    setBottomOpen(true);
+    setTerminalBusy(true);
+    setWorkspaceNotice(`Running ${trimmed}`);
+
+    try {
+      const result = await runWorkspaceCommand(trimmed);
+      startTransition(() => {
+        setTerminalHistory((current) => [result, ...current].slice(0, 10));
+        setWorkspaceNotice(result.success ? `Command finished: ${trimmed}` : `Command failed: ${trimmed}`);
+      });
+    } finally {
+      setTerminalBusy(false);
+    }
+  };
+
+  const runPreset = async (preset: WorkspaceCommandPreset) => {
+    setTerminalInput(preset.command);
+    await handleRunCommand(preset.command);
+  };
 
   const updateSelectedProvider = (
     patch: Partial<Omit<ProviderProfile, "provider" | "label">>
@@ -233,10 +418,8 @@ export default function App() {
               <strong>{activeModelLabel}</strong>
             </div>
             <div className="insight-card">
-              <span className="insight-label">Connected providers</span>
-              <strong>
-                {readyProviders.length} ready / {settings.providerProfiles.length} listed
-              </strong>
+              <span className="insight-label">Workspace status</span>
+              <strong>{workspaceNotice}</strong>
             </div>
             <div className="summary-card">
               <strong>Pending actions</strong>
@@ -399,6 +582,73 @@ export default function App() {
             </div>
           </>
         );
+      case "terminal":
+        return (
+          <>
+            <div className="bottom-panel-header">
+              <span className="section-label">Command bridge</span>
+              <span className="dock-chip">{terminalBusy ? "running" : `${terminalHistory.length} runs`}</span>
+            </div>
+            <div className="drawer-content terminal-drawer-content">
+              <div className="terminal-toolbar">
+                <div className="terminal-presets">
+                  {commandPresets.map((preset) => (
+                    <button
+                      className="terminal-preset"
+                      disabled={terminalBusy}
+                      key={preset.id}
+                      onClick={() => void runPreset(preset)}
+                      type="button"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="terminal-runner">
+                  <input
+                    className="terminal-input"
+                    onChange={(event) => setTerminalInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void handleRunCommand(terminalInput);
+                      }
+                    }}
+                    placeholder="Run an allowed workspace command"
+                    value={terminalInput}
+                  />
+                  <button
+                    className="primary-button"
+                    disabled={terminalBusy || terminalInput.trim().length === 0}
+                    onClick={() => void handleRunCommand(terminalInput)}
+                    type="button"
+                  >
+                    {terminalBusy ? "Running..." : "Run"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="terminal-history">
+                {terminalHistory.length === 0 ? (
+                  <div className="terminal-empty-state">Run a workspace command to see native output here.</div>
+                ) : (
+                  terminalHistory.map((result, index) => (
+                    <div className="terminal-card" key={`${result.command}-${index}`}>
+                      <div className="terminal-card-header">
+                        <strong>{result.command}</strong>
+                        <span className={`state-pill ${result.success ? "is-done" : "is-failed"}`}>
+                          {formatCommandSummary(result)}
+                        </span>
+                      </div>
+                      {result.stdout ? <pre className="terminal-output">{result.stdout}</pre> : null}
+                      {result.stderr ? <pre className="terminal-output is-error">{result.stderr}</pre> : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        );
     }
   };
 
@@ -424,7 +674,9 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="session-path">feature/cpp-repair / wt-cpp-01 / session {snapshot.sessionId}</div>
+        <div className="session-path">
+          {workspace.rootPath} / session {snapshot.sessionId}
+        </div>
 
         <div className="session-pills">
           <button
@@ -478,39 +730,60 @@ export default function App() {
         <aside className="pane explorer-pane">
           <div className="pane-header">
             <span>Explorer</span>
-            <span className="pane-meta">Focused files</span>
+            <span className="pane-meta">{workspace.files.length} workspace files</span>
           </div>
 
           <div className="pane-scroll">
             <section className="section-block">
               <div className="section-label">Open editors</div>
               <div className="flat-list">
-                <div className="flat-list-row is-active">
-                  <span>rigid_body_solver.cpp</span>
-                </div>
-                <div className="flat-list-row">
-                  <span>continuity.pack</span>
-                </div>
-                <div className="flat-list-row">
-                  <span>build.log</span>
-                </div>
+                {editorTabs.map((tabPath) => (
+                  <button
+                    className={`flat-list-row ${tabPath === activeFilePath ? "is-active" : ""}`}
+                    key={tabPath}
+                    onClick={() => void handleSelectFile(tabPath)}
+                    type="button"
+                  >
+                    <span>{labelForFilePath(tabPath)}</span>
+                    {isDocumentDirty(
+                      getWorkspaceDocument(openDocuments, tabPath)?.savedContent ?? "",
+                      getWorkspaceDocument(openDocuments, tabPath)?.currentContent ?? ""
+                    ) ? <span className="dirty-dot" /> : null}
+                  </button>
+                ))}
               </div>
             </section>
 
             <section className="section-block">
               <div className="section-label">Workspace</div>
-              <div className="tree-root">OpenGravity</div>
+              <div className="explorer-search">
+                <input
+                  className="explorer-search-input"
+                  onChange={(event) => setExplorerQuery(event.target.value)}
+                  placeholder="Filter workspace files"
+                  value={explorerQuery}
+                />
+              </div>
+              <div className="tree-root">{workspace.rootPath}</div>
               {explorerGroups.map((group) => (
                 <div className="tree-group" key={group.label}>
                   <div className={`tree-item ${group.label === "root" ? "is-root-group" : "is-folder"}`}>
                     <span>{group.label === "root" ? "root" : group.label}</span>
                   </div>
                   <div className="tree-children">
-                    {group.entries.map((entry) => (
-                      <div className="tree-item is-file" key={`${group.label}/${entry}`}>
-                        <span>{entry}</span>
-                      </div>
-                    ))}
+                    {group.entries.map((entry) => {
+                      const absolutePath = group.label === "root" ? entry : `${group.label}/${entry}`;
+                      return (
+                        <button
+                          className={`tree-item is-file ${absolutePath === activeFilePath ? "is-active" : ""}`}
+                          key={absolutePath}
+                          onClick={() => void handleSelectFile(absolutePath)}
+                          type="button"
+                        >
+                          <span>{entry}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -520,26 +793,37 @@ export default function App() {
 
         <main className="editor-column">
           <section className="editor-tabs">
-            <button className="editor-tab" type="button">
-              session.graph
-            </button>
-            <button className="editor-tab is-active" type="button">
-              rigid_body_solver.cpp
-            </button>
-            <button className="editor-tab" type="button">
-              continuity.pack
-            </button>
-            <button className="editor-tab" type="button">
-              build.log
-            </button>
+            {editorTabs.map((tabPath) => (
+              <button
+                className={`editor-tab ${tabPath === activeFilePath ? "is-active" : ""}`}
+                key={tabPath}
+                onClick={() => void handleSelectFile(tabPath)}
+                type="button"
+              >
+                {labelForFilePath(tabPath)}
+              </button>
+            ))}
           </section>
 
           <section className="editor-panel">
             <div className="editor-toolbar">
-              <div className="breadcrumbs">src &gt; rigid_body_solver.cpp</div>
+              <div className="breadcrumbs">{activeFilePath || "No file selected"}</div>
               <div className="editor-toolbar-right">
-                <span className="editor-badge">builder-1</span>
-                <span className={`editor-badge ${snapshot.setupRequired ? "" : "accent"}`}>{activeModelLabel}</span>
+                <span className="editor-badge">{workspaceBusy ? "Loading" : "Workspace"}</span>
+                <span className={`editor-badge ${editorDirty ? "" : "accent"}`}>
+                  {editorDirty ? "Unsaved" : "Saved"}
+                </span>
+                <button className="secondary-button slim-button" onClick={() => void handleReloadFile()} type="button">
+                  Reload
+                </button>
+                <button
+                  className="primary-button slim-button"
+                  disabled={saveBusy || !editorDirty}
+                  onClick={() => void handleSaveFile()}
+                  type="button"
+                >
+                  {saveBusy ? "Saving..." : "Save"}
+                </button>
               </div>
             </div>
 
@@ -549,8 +833,8 @@ export default function App() {
                   <div className="setup-copy">
                     <strong>Provider setup required</strong>
                     <p>
-                      OpenGravity has already prepared the compile-repair session. Connect a provider or local
-                      runtime to continue the same task with your own credentials.
+                      OpenGravity already prepared the compile-repair session. Connect a provider or local runtime to
+                      continue the same task with your own credentials.
                     </p>
                   </div>
                   <button className="primary-button" onClick={() => setSettingsOpen(true)} type="button">
@@ -559,13 +843,32 @@ export default function App() {
                 </div>
               ) : null}
 
-              <pre className="code-view">{snapshot.codeSample}</pre>
+              <textarea
+                className="code-editor-textarea"
+                onChange={(event) =>
+                  setOpenDocuments((current) =>
+                    updateWorkspaceDocumentContent(current, activeFilePath, event.target.value)
+                  )
+                }
+                spellCheck={false}
+                value={activeDocument?.currentContent ?? ""}
+              />
             </div>
           </section>
 
           <section className={`bottom-drawer ${bottomOpen ? "is-open" : "is-collapsed"}`}>
             <div className="bottom-drawer-bar">
               <div className="drawer-tabs">
+                <button
+                  className={`drawer-tab ${bottomView === "terminal" ? "is-active" : ""}`}
+                  onClick={() => {
+                    setBottomView("terminal");
+                    setBottomOpen(true);
+                  }}
+                  type="button"
+                >
+                  Terminal
+                </button>
                 <button
                   className={`drawer-tab ${bottomView === "build" ? "is-active" : ""}`}
                   onClick={() => {
@@ -685,18 +988,14 @@ export default function App() {
       </div>
 
       <footer className="statusbar">
-        <span>Branch feature/cpp-repair</span>
-        <span>Build {snapshot.executionPlan.primaryBuildSystem ?? "inspect"}</span>
-        <span>{snapshot.failure.category}</span>
+        <span>{workspace.rootPath}</span>
+        <span>{activeFilePath || "No file selected"}</span>
+        <span>{dirtyDocumentCount > 0 ? `${dirtyDocumentCount} dirty buffers` : "All buffers saved"}</span>
         <span>{readyProviders.length} providers ready</span>
       </footer>
 
       {settingsOpen && selectedProfile ? (
-        <div
-          className="settings-scrim"
-          onClick={() => setSettingsOpen(false)}
-          role="presentation"
-        >
+        <div className="settings-scrim" onClick={() => setSettingsOpen(false)} role="presentation">
           <section
             aria-label="Provider Settings"
             className="settings-panel"
@@ -729,9 +1028,7 @@ export default function App() {
                       }
                       value={availableModelIds.has(settings.activeModelId) ? settings.activeModelId : ""}
                     >
-                      {availableModelIds.size === 0 ? (
-                        <option value="">Connect a provider first</option>
-                      ) : null}
+                      {availableModelIds.size === 0 ? <option value="">Connect a provider first</option> : null}
                       {snapshot.models
                         .filter((model) => availableModelIds.has(model.id))
                         .map((model) => (

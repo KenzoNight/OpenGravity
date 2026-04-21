@@ -29,3 +29,5 @@ Current shell prototype includes:
 - setup-required state when no provider is configured
 - provider settings overlay for BYOK, active model selection, and fallback controls
 - desktop-safe local persistence for prototype settings
+- workspace file loading and saving through Tauri commands
+- guarded workspace command execution inside the native shell

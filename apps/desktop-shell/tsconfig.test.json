@@ -16,6 +16,9 @@
     "src/shell-state.test.ts",
     "src/settings-state.ts",
     "src/settings-state.test.ts",
+    "src/native-bridge.ts",
+    "src/workspace-state.ts",
+    "src/workspace-state.test.ts",
     "src/test-suite.ts"
   ]
 }
