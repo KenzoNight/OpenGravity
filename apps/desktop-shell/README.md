@@ -32,5 +32,5 @@ Current shell prototype includes:
 - workspace file loading and saving through Tauri commands
 - Monaco editor integration with file-aware language detection
 - guarded workspace command execution inside the native shell
-- streaming command output cards with cancel support
+- xterm-based streaming command sessions with cancel support
 - workflow execution tracking for recommended build and repair plans

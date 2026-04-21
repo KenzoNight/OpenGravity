@@ -134,6 +134,7 @@ Already implemented:
 - streaming command sessions with cancel support
 - workflow execution queues for recommended build and repair steps
 - Monaco-backed code editing with language-aware file models
+- xterm-based terminal sessions with live command output and run switching
 
 Not finished yet:
 

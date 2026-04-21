@@ -948,20 +948,70 @@ button {
   border-color: #3b6178;
 }
 
-.terminal-history {
+.terminal-workbench {
   min-height: 0;
-  overflow: auto;
   display: grid;
-  gap: 10px;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 12px;
 }
 
-.terminal-card {
+.terminal-session-list,
+.terminal-session-panel {
+  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
 }
 
-.terminal-card-header {
+.terminal-session-list {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  overflow: auto;
+  padding: 10px;
+}
+
+.terminal-session-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: inherit;
+  text-align: left;
+}
+
+.terminal-session-item.is-active {
+  border-color: #2f566e;
+  background: rgba(83, 210, 246, 0.08);
+}
+
+.terminal-session-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.terminal-session-copy strong {
+  font-size: 0.8rem;
+}
+
+.terminal-session-copy span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.terminal-session-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.terminal-session-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -970,31 +1020,31 @@ button {
   border-bottom: 1px solid var(--line);
 }
 
-.terminal-card-header strong {
-  font-size: 0.82rem;
+.terminal-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.terminal-meta-line {
-  padding: 10px 12px 0;
-  color: var(--muted);
-  font-size: 0.76rem;
+.terminal-session-body {
+  min-height: 0;
+  overflow: hidden;
 }
 
-.terminal-output {
-  margin: 0;
-  padding: 12px;
-  overflow: auto;
+.terminal-surface {
+  width: 100%;
+  height: 100%;
   background: #071019;
-  color: #dce6f4;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 0.78rem;
-  line-height: 1.55;
-  white-space: pre-wrap;
+  padding: 8px 0;
 }
 
-.terminal-output.is-error {
-  color: #ffd9d9;
-  border-top: 1px solid rgba(180, 59, 59, 0.45);
+.terminal-surface .xterm {
+  height: 100%;
+  padding: 0 8px;
+}
+
+.terminal-surface .xterm-viewport {
+  overflow-y: auto;
 }
 
 .terminal-empty-state {
@@ -1006,6 +1056,12 @@ button {
   color: var(--muted);
   font-size: 0.8rem;
   text-align: center;
+}
+
+.terminal-empty-state-compact {
+  min-height: 0;
+  height: 100%;
+  padding: 18px;
 }
 
 .workflow-summary-card,

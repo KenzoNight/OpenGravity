@@ -24,9 +24,6 @@ import {
   runWorkspaceCommand,
   startWorkspaceCommand,
   writeWorkspaceFile,
-  type WorkspaceCommandEventPayload,
-  type WorkspaceCommandStarted,
-  type WorkspaceCommandResult,
   type WorkspaceSnapshotPayload
 } from "./native-bridge";
 import {
@@ -66,6 +63,16 @@ import {
   type WorkspaceDocument,
   type WorkspaceCommandPreset
 } from "./workspace-state";
+import { TerminalSurface } from "./TerminalSurface";
+import {
+  appendTerminalSession,
+  applyWorkspaceCommandEvent,
+  createTerminalSession,
+  createTerminalSessionFromResult,
+  formatCommandSummary,
+  resolveSelectedTerminalRunId,
+  type TerminalSession
+} from "./terminal-state";
 import {
   applyWorkflowCommandResult,
   applyWorkflowEvent,
@@ -92,17 +99,6 @@ type BottomView = "build" | "tasks" | "events" | "log" | "terminal";
 interface ExplorerGroup {
   label: string;
   entries: string[];
-}
-
-interface TerminalSession {
-  runId: string;
-  command: string;
-  status: "running" | "completed" | "failed" | "cancelled";
-  stdout: string;
-  stderr: string;
-  exitCode?: number;
-  durationMs?: number;
-  message?: string;
 }
 
 const menuItems = ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"];
@@ -227,109 +223,6 @@ function buildExplorerGroups(paths: string[]): ExplorerGroup[] {
   }));
 }
 
-function formatCommandSummary(session: Pick<TerminalSession, "status" | "exitCode" | "durationMs">): string {
-  const durationLabel = typeof session.durationMs === "number" ? ` · ${session.durationMs} ms` : "";
-
-  switch (session.status) {
-    case "running":
-      return "Running";
-    case "completed":
-      return `Exit ${session.exitCode ?? 0}${durationLabel}`;
-    case "cancelled":
-      return `Cancelled (${session.exitCode ?? -1})${durationLabel}`;
-    case "failed":
-      return `Failed (${session.exitCode ?? -1})${durationLabel}`;
-  }
-}
-
-function createTerminalSession(started: WorkspaceCommandStarted): TerminalSession {
-  return {
-    runId: started.runId,
-    command: started.command,
-    status: "running",
-    stdout: "",
-    stderr: ""
-  };
-}
-
-function createTerminalSessionFromResult(result: WorkspaceCommandResult): TerminalSession {
-  return {
-    runId: `fallback-${Date.now()}`,
-    command: result.command,
-    status: result.success ? "completed" : "failed",
-    stdout: result.stdout,
-    stderr: result.stderr,
-    exitCode: result.exitCode,
-    durationMs: result.durationMs
-  };
-}
-
-function appendTerminalLine(existing: string, nextLine?: string): string {
-  if (!nextLine) {
-    return existing;
-  }
-
-  return existing ? `${existing}\n${nextLine}` : nextLine;
-}
-
-function applyWorkspaceCommandEvent(
-  sessions: TerminalSession[],
-  payload: WorkspaceCommandEventPayload
-): TerminalSession[] {
-  return sessions.map((session) => {
-    if (session.runId !== payload.runId) {
-      return session;
-    }
-
-    if (payload.kind === "stdout") {
-      return {
-        ...session,
-        stdout: appendTerminalLine(session.stdout, payload.line)
-      };
-    }
-
-    if (payload.kind === "stderr") {
-      return {
-        ...session,
-        stderr: appendTerminalLine(session.stderr, payload.line)
-      };
-    }
-
-    if (payload.kind === "cancelled") {
-      return {
-        ...session,
-        status: "cancelled",
-        exitCode: payload.exitCode,
-        durationMs: payload.durationMs,
-        message: payload.message
-      };
-    }
-
-    if (payload.kind === "completed") {
-      return {
-        ...session,
-        status: payload.success ? "completed" : "failed",
-        exitCode: payload.exitCode,
-        durationMs: payload.durationMs,
-        message: payload.message
-      };
-    }
-
-    if (payload.kind === "launch-failed") {
-      return {
-        ...session,
-        status: "failed",
-        stderr: appendTerminalLine(session.stderr, payload.message),
-        exitCode: payload.exitCode,
-        durationMs: payload.durationMs,
-        message: payload.message
-      };
-    }
-
-    return session;
-  });
-}
-
 export default function App() {
   const [shellHealth, setShellHealth] = useState<ShellHealth>(browserFallbackHealth);
   const [settings, setSettings] = useState<WorkbenchSettings>(() => loadWorkbenchSettings());
@@ -349,6 +242,7 @@ export default function App() {
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [activeTerminalRunId, setActiveTerminalRunId] = useState<string | null>(null);
+  const [selectedTerminalRunId, setSelectedTerminalRunId] = useState<string | null>(null);
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
@@ -452,6 +346,8 @@ export default function App() {
   const dirtyDocumentCount = getDirtyWorkspaceDocumentCount(openDocuments);
   const terminalBusy = activeTerminalRunId !== null;
   const activeTerminalSession = terminalSessions.find((session) => session.runId === activeTerminalRunId) ?? null;
+  const selectedTerminalSession =
+    terminalSessions.find((session) => session.runId === selectedTerminalRunId) ?? terminalSessions[0] ?? null;
   const workflowProgress = workflowRun ? getWorkflowProgress(workflowRun) : null;
   const workbenchClassName = [
     "workbench",
@@ -470,6 +366,12 @@ export default function App() {
       setTerminalInput(commandPresets[0].command);
     }
   }, [commandPresets, terminalInput]);
+
+  useEffect(() => {
+    setSelectedTerminalRunId((current) =>
+      resolveSelectedTerminalRunId(terminalSessions, current, activeTerminalRunId)
+    );
+  }, [activeTerminalRunId, terminalSessions]);
 
   useEffect(() => {
     if (!workflowRun || workflowRun.status !== "running" || workflowRun.currentRunId || terminalBusy || workflowDispatchBusy) {
@@ -597,7 +499,8 @@ export default function App() {
       const started = await startWorkspaceCommand(trimmed);
       startTransition(() => {
         setActiveTerminalRunId(started.runId);
-        setTerminalSessions((current) => [createTerminalSession(started), ...current].slice(0, 12));
+        setSelectedTerminalRunId(started.runId);
+        setTerminalSessions((current) => appendTerminalSession(current, createTerminalSession(started)));
         if (workflowItemId) {
           setWorkflowRun((current) => (current ? markWorkflowItemRunning(current, workflowItemId, started.runId) : current));
         }
@@ -609,7 +512,8 @@ export default function App() {
       const fallbackSession = createTerminalSessionFromResult(result);
 
       startTransition(() => {
-        setTerminalSessions((current) => [fallbackSession, ...current].slice(0, 12));
+        setSelectedTerminalRunId(fallbackSession.runId);
+        setTerminalSessions((current) => appendTerminalSession(current, fallbackSession));
         setWorkspaceNotice(result.success ? `Command finished: ${trimmed}` : `Command failed: ${trimmed}`);
         if (workflowItemId) {
           setWorkflowRun((current) => (current ? applyWorkflowCommandResult(current, workflowItemId, result) : current));
@@ -929,7 +833,7 @@ export default function App() {
         return (
           <>
             <div className="bottom-panel-header">
-              <span className="section-label">Command bridge</span>
+              <span className="section-label">Terminal</span>
               <span className="dock-chip">{terminalBusy ? "running" : `${terminalSessions.length} runs`}</span>
             </div>
             <div className="drawer-content terminal-drawer-content">
@@ -979,14 +883,26 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="terminal-history">
-                {terminalSessions.length === 0 ? (
-                  <div className="terminal-empty-state">Run a workspace command to see native output here.</div>
-                ) : (
-                  terminalSessions.map((session) => (
-                    <div className="terminal-card" key={session.runId}>
-                      <div className="terminal-card-header">
-                        <strong>{session.command}</strong>
+              <div className="terminal-workbench">
+                <aside className="terminal-session-list">
+                  {terminalSessions.length === 0 ? (
+                    <div className="terminal-empty-state terminal-empty-state-compact">
+                      Run a workspace command to open a native session.
+                    </div>
+                  ) : (
+                    terminalSessions.map((session) => (
+                      <button
+                        className={`terminal-session-item ${
+                          session.runId === selectedTerminalSession?.runId ? "is-active" : ""
+                        }`}
+                        key={session.runId}
+                        onClick={() => setSelectedTerminalRunId(session.runId)}
+                        type="button"
+                      >
+                        <div className="terminal-session-copy">
+                          <strong>{session.command}</strong>
+                          <span>{formatCommandSummary(session)}</span>
+                        </div>
                         <span
                           className={`state-pill ${
                             session.status === "running"
@@ -998,15 +914,56 @@ export default function App() {
                                   : "is-failed"
                           }`}
                         >
-                          {formatCommandSummary(session)}
+                          {session.status}
                         </span>
-                      </div>
-                      {session.message ? <div className="terminal-meta-line">{session.message}</div> : null}
-                      {session.stdout ? <pre className="terminal-output">{session.stdout}</pre> : null}
-                      {session.stderr ? <pre className="terminal-output is-error">{session.stderr}</pre> : null}
+                      </button>
+                    ))
+                  )}
+                </aside>
+
+                <section className="terminal-session-panel">
+                  <div className="terminal-session-header">
+                    <div className="terminal-session-copy">
+                      <strong>{selectedTerminalSession?.command ?? "No session selected"}</strong>
+                      <span>
+                        {selectedTerminalSession
+                          ? selectedTerminalSession.message ?? formatCommandSummary(selectedTerminalSession)
+                          : "Select a command run to inspect live output."}
+                      </span>
                     </div>
-                  ))
-                )}
+                    {selectedTerminalSession ? (
+                      <div className="terminal-session-actions">
+                        <span
+                          className={`state-pill ${
+                            selectedTerminalSession.status === "running"
+                              ? "is-running"
+                              : selectedTerminalSession.status === "completed"
+                                ? "is-done"
+                                : selectedTerminalSession.status === "cancelled"
+                                  ? "is-blocked"
+                                  : "is-failed"
+                          }`}
+                        >
+                          {formatCommandSummary(selectedTerminalSession)}
+                        </span>
+                        <button
+                          className="secondary-button slim-button"
+                          onClick={() => setTerminalInput(selectedTerminalSession.command)}
+                          type="button"
+                        >
+                          Reuse command
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="terminal-session-body">
+                    <TerminalSurface
+                      emptyLabel="Run a workspace command to see native output here."
+                      session={selectedTerminalSession}
+                    />
+                  </div>
+                </section>
               </div>
             </div>
           </>
