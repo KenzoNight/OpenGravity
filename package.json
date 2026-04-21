@@ -1,0 +1,24 @@
+{
+  "name": "opengravity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "app:dev": "npm --workspace @opengravity/desktop-shell run tauri:dev",
+    "app:check": "npm --workspace @opengravity/desktop-shell run tauri:check",
+    "app:web-build": "npm --workspace @opengravity/desktop-shell run build",
+    "build": "tsc --pretty",
+    "typecheck": "tsc --pretty --noEmit && npm --workspace @opengravity/desktop-shell run typecheck",
+    "test": "npm run build && node --test --test-isolation=none dist/packages/session-core/src/index.test.js dist/packages/model-router/src/index.test.js dist/packages/build-intelligence/src/index.test.js dist/services/orchestrator/src/index.test.js dist/services/orchestrator/src/persistence.test.js dist/services/orchestrator/src/runtime.test.js && npm --workspace @opengravity/desktop-shell run test",
+    "test:watch": "npm run build && node --test --watch --test-isolation=none dist/packages/session-core/src/index.test.js dist/packages/model-router/src/index.test.js dist/packages/build-intelligence/src/index.test.js dist/services/orchestrator/src/index.test.js dist/services/orchestrator/src/persistence.test.js dist/services/orchestrator/src/runtime.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenGravity Desktop Concept</title>
+  <style>
+    :root {
+      --bg: #081019;
+      --bg-2: #0d1723;
+      --panel: rgba(10, 20, 31, 0.84);
+      --panel-strong: rgba(12, 22, 34, 0.96);
+      --line: rgba(128, 164, 191, 0.18);
+      --line-strong: rgba(140, 188, 225, 0.28);
+      --text: #e7eef9;
+      --muted: #95a4b8;
+      --accent: #68e1ff;
+      --accent-2: #7df3ba;
+      --accent-3: #ffd36b;
+      --danger: #ff7c9e;
+      --shadow: 0 20px 80px rgba(0, 0, 0, 0.38);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --code: "Cascadia Code", "Consolas", monospace;
+      --ui: "Segoe UI Variable", "Bahnschrift", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--ui);
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 18%, rgba(104, 225, 255, 0.18), transparent 28%),
+        radial-gradient(circle at 84% 12%, rgba(125, 243, 186, 0.12), transparent 24%),
+        radial-gradient(circle at 55% 88%, rgba(255, 211, 107, 0.10), transparent 28%),
+        linear-gradient(180deg, #07111b 0%, #050c14 100%);
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: radial-gradient(circle at center, black, transparent 78%);
+      pointer-events: none;
+    }
+
+    .frame {
+      width: 1850px;
+      height: 1040px;
+      margin: 20px auto;
+      border-radius: 32px;
+      border: 1px solid rgba(132, 175, 207, 0.18);
+      background: linear-gradient(180deg, rgba(11, 21, 31, 0.94), rgba(7, 14, 24, 0.98));
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .frame::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(115deg, rgba(104, 225, 255, 0.05), transparent 42%, rgba(125, 243, 186, 0.04));
+      pointer-events: none;
+    }
+
+    .topbar {
+      height: 74px;
+      display: grid;
+      grid-template-columns: 300px 1fr 460px;
+      align-items: center;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 15, 24, 0.82);
+      backdrop-filter: blur(24px);
+      position: relative;
+      z-index: 1;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background:
+        linear-gradient(150deg, rgba(104, 225, 255, 0.95), rgba(125, 243, 186, 0.65));
+      position: relative;
+      box-shadow: 0 10px 24px rgba(104, 225, 255, 0.26);
+    }
+
+    .logo::before {
+      content: "";
+      position: absolute;
+      inset: 8px 9px 7px 9px;
+      border-radius: 10px 10px 12px 12px;
+      background: #07111b;
+      clip-path: polygon(48% 0%, 100% 100%, 73% 100%, 48% 43%, 24% 100%, 0 100%);
+    }
+
+    .breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      justify-self: center;
+      padding: 10px 18px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .status-strip {
+      justify-self: end;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .pill {
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .pill strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .pill.accent {
+      background: linear-gradient(135deg, rgba(104, 225, 255, 0.10), rgba(125, 243, 186, 0.08));
+      border-color: rgba(104, 225, 255, 0.28);
+      color: #d6f7ff;
+    }
+
+    .layout {
+      height: calc(100% - 74px);
+      display: grid;
+      grid-template-columns: 286px 1fr 420px;
+      gap: 0;
+      position: relative;
+      z-index: 1;
+    }
+
+    .sidebar, .aside {
+      border-right: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(9, 18, 29, 0.92), rgba(7, 13, 22, 0.92));
+    }
+
+    .aside {
+      border-right: none;
+      border-left: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(8, 17, 28, 0.94), rgba(7, 14, 23, 0.94));
+    }
+
+    .panel-section {
+      padding: 18px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #7f93a9;
+      margin-bottom: 14px;
+    }
+
+    .workspace-badge {
+      display: grid;
+      gap: 8px;
+      padding: 18px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(104, 225, 255, 0.10), rgba(125, 243, 186, 0.04));
+      border: 1px solid rgba(104, 225, 255, 0.16);
+    }
+
+    .workspace-badge h2, .card h3 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0.01em;
+    }
+
+    .workspace-badge p, .card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 13px;
+    }
+
+    .nav-list, .agent-list, .metric-list, .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .nav-item, .agent-row, .metric-row, .timeline-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .nav-item .path {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .indicator {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 6px rgba(125, 243, 186, 0.09);
+      flex: 0 0 auto;
+    }
+
+    .indicator.busy {
+      background: var(--accent);
+      box-shadow: 0 0 0 6px rgba(104, 225, 255, 0.09);
+    }
+
+    .indicator.warn {
+      background: var(--accent-3);
+      box-shadow: 0 0 0 6px rgba(255, 211, 107, 0.08);
+    }
+
+    .indicator.danger {
+      background: var(--danger);
+      box-shadow: 0 0 0 6px rgba(255, 124, 158, 0.08);
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: 58px 1fr 238px;
+      min-width: 0;
+      background:
+        linear-gradient(180deg, rgba(8, 15, 25, 0.52), rgba(6, 11, 18, 0.84)),
+        radial-gradient(circle at 10% 10%, rgba(104, 225, 255, 0.06), transparent 30%);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(9, 18, 29, 0.84);
+    }
+
+    .tab {
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .tab.active {
+      color: var(--text);
+      background: linear-gradient(180deg, rgba(104, 225, 255, 0.12), rgba(104, 225, 255, 0.04));
+      border-color: rgba(104, 225, 255, 0.2);
+    }
+
+    .editor {
+      display: grid;
+      grid-template-columns: 64px 1fr 220px;
+      min-height: 0;
+    }
+
+    .gutter {
+      padding: 18px 12px;
+      border-right: 1px solid rgba(255, 255, 255, 0.04);
+      color: #5e7085;
+      font: 13px/1.75 var(--code);
+      text-align: right;
+    }
+
+    .code {
+      padding: 18px 22px;
+      font: 14px/1.78 var(--code);
+      color: #d5e4f5;
+      white-space: pre;
+      overflow: hidden;
+    }
+
+    .code .kw { color: #8ed1ff; }
+    .code .type { color: #79efc9; }
+    .code .fn { color: #ffe08f; }
+    .code .str { color: #ffb4c3; }
+    .code .cm { color: #6d8099; }
+    .code .num { color: #bba6ff; }
+
+    .minimap {
+      border-left: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 16px 14px;
+      display: grid;
+      grid-auto-rows: 9px;
+      gap: 5px;
+      align-content: start;
+    }
+
+    .mini-line {
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(104, 225, 255, 0.22), rgba(125, 243, 186, 0.08));
+    }
+
+    .mini-line.dim {
+      opacity: 0.36;
+    }
+
+    .console {
+      padding: 16px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 14px;
+      background: linear-gradient(180deg, rgba(8, 15, 24, 0.96), rgba(7, 13, 22, 0.96));
+    }
+
+    .card {
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: #d9e8f8;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .log {
+      border-radius: 14px;
+      background: rgba(0, 0, 0, 0.20);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 12px 14px;
+      font: 12.5px/1.65 var(--code);
+      color: #cfe0f3;
+      white-space: pre-wrap;
+    }
+
+    .log .ok { color: #79efc9; }
+    .log .warn { color: #ffd36b; }
+    .log .err { color: #ff8ca7; }
+
+    .aside .panel-section:first-child {
+      padding-top: 20px;
+    }
+
+    .agent-row strong, .metric-row strong {
+      display: block;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .agent-row span, .metric-row span, .timeline-row span {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric-box {
+      padding: 14px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .metric-box .value {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .metric-box .label {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .timeline-row {
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 10px;
+    }
+
+    .timeline-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--accent);
+      margin-top: 6px;
+      flex: 0 0 auto;
+    }
+
+    .timeline-row.warning .timeline-dot {
+      background: var(--accent-3);
+    }
+
+    .timeline-row.success .timeline-dot {
+      background: var(--accent-2);
+    }
+
+    .composer {
+      border-radius: 18px;
+      border: 1px solid rgba(104, 225, 255, 0.16);
+      background: linear-gradient(180deg, rgba(104, 225, 255, 0.08), rgba(255, 255, 255, 0.02));
+      padding: 14px 14px 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .composer-input {
+      min-height: 86px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(0, 0, 0, 0.14);
+      padding: 12px 14px;
+      color: #dce9f7;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .composer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .action-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .send {
+      padding: 11px 16px;
+      border-radius: 14px;
+      border: 1px solid rgba(125, 243, 186, 0.28);
+      background: linear-gradient(135deg, rgba(125, 243, 186, 0.18), rgba(104, 225, 255, 0.20));
+      color: white;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <div style="font-size: 18px;">OpenGravity</div>
+          <div style="font-size: 11px; color: var(--muted); letter-spacing: 0.12em; text-transform: uppercase;">Agent Operating System</div>
+        </div>
+      </div>
+      <div class="breadcrumbs">
+        <span>Workspace</span>
+        <span>/</span>
+        <span>game-physics-engine</span>
+        <span>/</span>
+        <span>src</span>
+        <span>/</span>
+        <span>rigid_body_solver.cpp</span>
+      </div>
+      <div class="status-strip">
+        <div class="pill"><strong>Claude 4 Opus</strong> hit rate limit at 02:41</div>
+        <div class="pill accent"><strong>Gemini 2.5 Pro</strong> resumed with compacted task state</div>
+        <div class="pill"><strong>5</strong> active agents</div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="panel-section">
+          <div class="workspace-badge">
+            <div class="section-label">Session</div>
+            <h2>C++ Build Recovery</h2>
+            <p>OpenGravity detected CMake, resumed from a failed MSVC include-path compile, and reassigned the Builder agent after provider failover.</p>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-label">Workspace Map</div>
+          <div class="nav-list">
+            <div class="nav-item"><div><strong>CMakeLists.txt</strong><div class="path">root build graph</div></div><div class="indicator busy"></div></div>
+            <div class="nav-item"><div><strong>src/rigid_body_solver.cpp</strong><div class="path">active editor</div></div><div class="indicator"></div></div>
+            <div class="nav-item"><div><strong>include/physics/solver.hpp</strong><div class="path">dependency surface</div></div><div class="indicator"></div></div>
+            <div class="nav-item"><div><strong>tests/solver_regression.cpp</strong><div class="path">verification target</div></div><div class="indicator warn"></div></div>
+            <div class="nav-item"><div><strong>docs/architecture.md</strong><div class="path">memory context</div></div><div class="indicator"></div></div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-label">Build Matrix</div>
+          <div class="metric-grid">
+            <div class="metric-box">
+              <div class="value">C++20</div>
+              <div class="label">Language profile</div>
+            </div>
+            <div class="metric-box">
+              <div class="value">MSVC</div>
+              <div class="label">Current compiler</div>
+            </div>
+            <div class="metric-box">
+              <div class="value">CMake</div>
+              <div class="label">Build system</div>
+            </div>
+            <div class="metric-box">
+              <div class="value">2.4s</div>
+              <div class="label">Last rerun</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="tabs">
+          <div class="tab">session.graph</div>
+          <div class="tab active">rigid_body_solver.cpp</div>
+          <div class="tab">solver_regression.cpp</div>
+          <div class="tab">build log</div>
+          <div class="tab">continuity pack</div>
+        </div>
+
+        <div class="editor">
+          <div class="gutter">32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48</div>
+          <div class="code"><span class="cm">// Builder agent patched include resolution after the Claude → Gemini failover</span>
+<span class="kw">#include</span> <span class="str">"physics/solver.hpp"</span>
+<span class="kw">#include</span> <span class="str">"physics/workspace_context.hpp"</span>
+
+<span class="kw">namespace</span> <span class="type">og</span> {
+
+<span class="type">SolveResult</span> <span class="fn">RigidBodySolver::run</span>(<span class="kw">const</span> <span class="type">SolveInput</span>&amp; input) {
+    <span class="type">WorkspaceContext</span> context = <span class="fn">workspace_.restoreCheckpoint</span>(<span class="str">"builder:msvc-header-fix"</span>);
+    <span class="kw">if</span> (!context.<span class="fn">hasToolchain</span>(<span class="str">"msvc"</span>)) {
+        <span class="kw">return</span> <span class="type">SolveResult</span>::<span class="fn">blocked</span>(<span class="str">"MSVC toolchain unavailable"</span>);
+    }
+
+    <span class="type">BuildPlan</span> plan = <span class="fn">context.activePlan</span>();
+    plan.includePaths.<span class="fn">push_back</span>(<span class="str">"include"</span>);
+    plan.flags.<span class="fn">push_back</span>(<span class="str">"/std:c++20"</span>);
+
+    <span class="type">CompileResult</span> build = <span class="fn">toolchain_.compile</span>(plan);
+    <span class="kw">if</span> (!build.success) {
+        <span class="kw">return</span> <span class="type">SolveResult</span>::<span class="fn">retryable</span>(build.stderr);
+    }
+
+    <span class="kw">return</span> <span class="type">SolveResult</span>::<span class="fn">ok</span>(build.binaryPath);
+}
+
+} <span class="cm">// namespace og</span></div>
+          <div class="minimap">
+            <div class="mini-line" style="width: 84%;"></div>
+            <div class="mini-line dim" style="width: 52%;"></div>
+            <div class="mini-line dim" style="width: 63%;"></div>
+            <div class="mini-line" style="width: 88%;"></div>
+            <div class="mini-line dim" style="width: 44%;"></div>
+            <div class="mini-line" style="width: 82%;"></div>
+            <div class="mini-line dim" style="width: 59%;"></div>
+            <div class="mini-line dim" style="width: 71%;"></div>
+            <div class="mini-line" style="width: 90%;"></div>
+            <div class="mini-line dim" style="width: 47%;"></div>
+            <div class="mini-line" style="width: 77%;"></div>
+            <div class="mini-line dim" style="width: 58%;"></div>
+            <div class="mini-line" style="width: 86%;"></div>
+            <div class="mini-line dim" style="width: 42%;"></div>
+            <div class="mini-line" style="width: 80%;"></div>
+            <div class="mini-line dim" style="width: 54%;"></div>
+            <div class="mini-line" style="width: 68%;"></div>
+          </div>
+        </div>
+
+        <div class="console">
+          <div class="card">
+            <div class="card-head">
+              <h3>Build Intelligence Engine</h3>
+              <div class="tag">Compile • Test • Repair</div>
+            </div>
+            <p>Toolchain-aware execution turns compiler output into targeted repair loops. The agent sees CMake, compiler, flags, failed headers, retries, and test aftermath as first-class state.</p>
+            <div class="log">> cmake -S . -B build -G Ninja
+<span class="ok">[configure] detected compiler: cl.exe 19.43</span>
+> cmake --build build
+<span class="err">fatal error C1083: cannot open include file: 'physics/solver.hpp'</span>
+<span class="warn">builder agent patched includePaths += "include"</span>
+> cmake --build build
+<span class="ok">[100%] rigid_solver compiled successfully</span>
+> ctest --output-on-failure
+<span class="ok">solver_regression ... passed</span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Continuity Console</h3>
+              <div class="tag">Claude → Gemini</div>
+            </div>
+            <p>The active model can change without the conversation losing task state, error history, artifacts, or pending actions.</p>
+            <div class="timeline">
+              <div class="timeline-row warning"><div class="timeline-dot"></div><div><strong>02:41</strong><span>Claude hit rate limit during repair step 3 of 5.</span></div></div>
+              <div class="timeline-row"><div class="timeline-dot"></div><div><strong>02:41</strong><span>Context engine generated a continuity pack with build logs, changed files, and next action.</span></div></div>
+              <div class="timeline-row success"><div class="timeline-dot"></div><div><strong>02:42</strong><span>Gemini resumed from the same failed compile and completed the recovery loop.</span></div></div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <aside class="aside">
+        <div class="panel-section">
+          <div class="section-label">Agent Manager</div>
+          <div class="agent-list">
+            <div class="agent-row"><div><strong>Architect</strong><span>tracking design drift</span></div><div class="indicator"></div></div>
+            <div class="agent-row"><div><strong>Builder</strong><span>rerunning cmake + ctest</span></div><div class="indicator busy"></div></div>
+            <div class="agent-row"><div><strong>Reviewer</strong><span>inspecting patch risk</span></div><div class="indicator"></div></div>
+            <div class="agent-row"><div><strong>Memory</strong><span>compacting session state</span></div><div class="indicator warn"></div></div>
+            <div class="agent-row"><div><strong>Browser</strong><span>idle, waiting on UI task</span></div><div class="indicator"></div></div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-label">Session Metrics</div>
+          <div class="metric-list">
+            <div class="metric-row"><div><strong>Active task</strong><span>C++ compile recovery + regression rerun</span></div><div>3/5</div></div>
+            <div class="metric-row"><div><strong>Compactions</strong><span>working memory preserved</span></div><div>2</div></div>
+            <div class="metric-row"><div><strong>Fallback route</strong><span>Anthropic → Gemini</span></div><div>hot</div></div>
+            <div class="metric-row"><div><strong>Artifacts</strong><span>diff, build log, test report</span></div><div>7</div></div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-label">Continuity Pack</div>
+          <div class="card">
+            <p><strong>Preserved state</strong></p>
+            <p>Goal: restore MSVC build, rerun `solver_regression`, keep the branch clean.</p>
+            <p>Files: `CMakeLists.txt`, `rigid_body_solver.cpp`, `solver.hpp`</p>
+            <p>Best next action: verify the patched include path under clean configure.</p>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-label">Command Surface</div>
+          <div class="composer">
+            <div class="composer-input">Compile the project, keep the same task alive if Claude hits the limit, and show me every artifact before merge.</div>
+            <div class="composer-actions">
+              <div class="action-row">
+                <div class="chip">Multi-agent</div>
+                <div class="chip">Auto Compact</div>
+                <div class="chip">BYOK Router</div>
+                <div class="chip">C++ Aware</div>
+              </div>
+              <button class="send">Dispatch</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

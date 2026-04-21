@@ -1,0 +1,33 @@
+{
+  "name": "@opengravity/desktop-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "test": "node ./scripts/run-shell-state-test.mjs",
+    "typecheck": "tsc -b",
+    "tauri:dev": "node ./scripts/run-tauri.mjs dev",
+    "tauri:build": "node ./scripts/run-tauri.mjs build",
+    "tauri:check": "node ./scripts/run-tauri.mjs check"
+  },
+  "dependencies": {
+    "@opengravity/build-intelligence": "0.1.0",
+    "@opengravity/model-router": "0.1.0",
+    "@opengravity/orchestrator": "0.1.0",
+    "@opengravity/session-core": "0.1.0",
+    "@opengravity/shared-types": "0.1.0",
+    "@tauri-apps/api": "^2.8.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.2",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "vite": "^7.1.5"
+  }
+}

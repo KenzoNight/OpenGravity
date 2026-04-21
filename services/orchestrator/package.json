@@ -1,0 +1,15 @@
+{
+  "name": "@opengravity/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser": "./src/browser.ts"
+  },
+  "dependencies": {
+    "@opengravity/model-router": "0.1.0",
+    "@opengravity/session-core": "0.1.0",
+    "@opengravity/shared-types": "0.1.0"
+  }
+}
