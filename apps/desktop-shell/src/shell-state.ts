@@ -293,23 +293,24 @@ const baseAgents: AgentDescriptor[] = [
 
 export function buildDesktopShellSnapshot(
   shellHealth: ShellHealth,
-  settings: WorkbenchSettings = createDefaultWorkbenchSettings(desktopShellModels)
+  settings: WorkbenchSettings = createDefaultWorkbenchSettings(desktopShellModels),
+  modelCatalog: ModelDescriptor[] = desktopShellModels
 ): DesktopShellSnapshot {
   const profile = detectWorkspaceProfile(workspaceFiles);
   const executionPlan = recommendWorkspaceExecution(profile);
   const failure = classifyBuildFailure(buildLog);
-  const availableModelIds = new Set(getAvailableModelIds(settings, desktopShellModels));
+  const availableModelIds = new Set(getAvailableModelIds(settings, modelCatalog));
   const setupRequired = availableModelIds.size === 0;
   const providerHealth = resolveProviderHealth(settings, baseProviderHealth);
-  const routeModels = desktopShellModels.filter((model) => availableModelIds.has(model.id));
-  const fallbackModels = routeModels.length > 0 ? routeModels : desktopShellModels;
+  const routeModels = modelCatalog.filter((model) => availableModelIds.has(model.id));
+  const fallbackModels = routeModels.length > 0 ? routeModels : modelCatalog;
   const activeModelId =
     (!setupRequired && availableModelIds.has(settings.activeModelId)
       ? settings.activeModelId
       : fallbackModels[0]?.id) ??
-    desktopShellModels[0]?.id ??
+    modelCatalog[0]?.id ??
     "";
-  const activeModel = desktopShellModels.find((model) => model.id === activeModelId) ?? desktopShellModels[0];
+  const activeModel = modelCatalog.find((model) => model.id === activeModelId) ?? modelCatalog[0];
 
   const runtime = new InMemoryOrchestratorRuntime({
     graph: baseTasks,
@@ -446,7 +447,7 @@ export function buildDesktopShellSnapshot(
     failure,
     handoffPlan,
     providerHealth,
-    models: desktopShellModels,
+    models: modelCatalog,
     tasks: runtimeSnapshot.graph.tasks,
     agents: runtimeSnapshot.registry.agents,
     runtimeStats: getTaskCompletionStats(runtimeSnapshot.graph),

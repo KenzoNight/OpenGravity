@@ -900,6 +900,69 @@ button {
   gap: 10px;
 }
 
+.catalog-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.catalog-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.catalog-list {
+  display: grid;
+  gap: 10px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.catalog-list-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  text-align: left;
+}
+
+.catalog-list-item.is-active {
+  border-color: #3a647c;
+  background: rgba(83, 210, 246, 0.08);
+}
+
+.catalog-list-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.catalog-list-copy strong {
+  font-size: 0.82rem;
+}
+
+.catalog-list-copy span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.catalog-list-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .terminal-drawer-content {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

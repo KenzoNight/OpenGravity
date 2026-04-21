@@ -33,4 +33,5 @@ Current shell prototype includes:
 - Monaco editor integration with file-aware language detection
 - guarded workspace command execution inside the native shell
 - xterm-based streaming command sessions with cancel support
+- live OpenRouter catalog discovery with free-model selection
 - workflow execution tracking for recommended build and repair plans

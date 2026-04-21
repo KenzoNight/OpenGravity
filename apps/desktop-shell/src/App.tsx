@@ -43,6 +43,11 @@ import {
   type WorkbenchSettings
 } from "./settings-state";
 import {
+  fetchOpenRouterCatalog,
+  mergeModelCatalog,
+  type ProviderCatalogSnapshot
+} from "./provider-catalog";
+import {
   browserFallbackHealth,
   buildDesktopShellSnapshot,
   desktopShellModels,
@@ -245,6 +250,9 @@ export default function App() {
   const [selectedTerminalRunId, setSelectedTerminalRunId] = useState<string | null>(null);
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
+  const [openRouterCatalog, setOpenRouterCatalog] = useState<ProviderCatalogSnapshot | null>(null);
+  const [providerCatalogBusy, setProviderCatalogBusy] = useState<ModelProvider | null>(null);
+  const [providerCatalogError, setProviderCatalogError] = useState<string | null>(null);
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowDispatchBusy, setWorkflowDispatchBusy] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
@@ -309,7 +317,14 @@ export default function App() {
     }
   }, [selectedProvider, settings.providerProfiles]);
 
-  const snapshot = useMemo(() => buildDesktopShellSnapshot(shellHealth, settings), [shellHealth, settings]);
+  const modelCatalog = useMemo(
+    () => mergeModelCatalog(desktopShellModels, openRouterCatalog?.models ?? []),
+    [openRouterCatalog]
+  );
+  const snapshot = useMemo(
+    () => buildDesktopShellSnapshot(shellHealth, settings, modelCatalog),
+    [modelCatalog, shellHealth, settings]
+  );
   const workflowTemplate = useMemo(() => createWorkflowRun(snapshot.executionPlan), [snapshot.executionPlan]);
   const filteredWorkspaceFiles = useMemo(
     () => filterWorkspaceFiles(workspace.files, explorerQuery),
@@ -332,6 +347,12 @@ export default function App() {
   );
   const selectedProfile = settings.providerProfiles.find((profile) => profile.provider === selectedProvider) ?? settings.providerProfiles[0];
   const selectedProviderModels = selectedProfile ? getModelsForProvider(snapshot.models, selectedProfile.provider) : [];
+  const selectedProviderCatalogBusy = providerCatalogBusy === selectedProfile?.provider;
+  const selectedProviderSupportsCatalog = selectedProfile?.provider === "openrouter";
+  const openRouterFreeModels = useMemo(
+    () => openRouterCatalog?.models.filter((model) => model.isFree) ?? [],
+    [openRouterCatalog]
+  );
   const recentEvents = snapshot.sessionRecord.events.slice(-6).reverse();
   const recentArtifacts = snapshot.sessionRecord.artifacts.slice(-4).reverse();
   const runningTask = snapshot.tasks.find((task) => task.status === "running");
@@ -360,6 +381,10 @@ export default function App() {
   useEffect(() => {
     setWorkflowRun(workflowTemplate);
   }, [workflowTemplate]);
+
+  useEffect(() => {
+    setSettings((current) => normalizeWorkbenchSettings(current, modelCatalog));
+  }, [modelCatalog]);
 
   useEffect(() => {
     if (!terminalInput && commandPresets[0]) {
@@ -567,6 +592,32 @@ export default function App() {
 
     setWorkflowRun(createWorkflowRun(snapshot.executionPlan));
     setWorkspaceNotice("Workflow state reset.");
+  };
+
+  const handleDiscoverOpenRouterModels = async () => {
+    const openRouterProfile = settings.providerProfiles.find((profile) => profile.provider === "openrouter");
+    if (!openRouterProfile) {
+      return;
+    }
+
+    setProviderCatalogBusy("openrouter");
+    setProviderCatalogError(null);
+
+    try {
+      const catalog = await fetchOpenRouterCatalog(openRouterProfile.apiKey, openRouterProfile.baseUrl);
+      startTransition(() => {
+        setOpenRouterCatalog(catalog);
+        setWorkspaceNotice(`Loaded ${catalog.models.length} OpenRouter models (${catalog.freeCount} free).`);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "OpenRouter catalog request failed.";
+      startTransition(() => {
+        setProviderCatalogError(message);
+        setWorkspaceNotice(message);
+      });
+    } finally {
+      setProviderCatalogBusy(null);
+    }
   };
 
   const updateSelectedProvider = (
@@ -1474,6 +1525,62 @@ export default function App() {
                       <span>Allow fallback routing</span>
                     </label>
                   </div>
+
+                  {selectedProviderSupportsCatalog ? (
+                    <div className="settings-section catalog-section">
+                      <div className="settings-section-headline">
+                        <div>
+                          <div className="settings-provider-title">OpenRouter Catalog</div>
+                          <div className="settings-provider-copy">
+                            Discover live models from the OpenRouter `/models` endpoint and surface current free options.
+                          </div>
+                        </div>
+                        <button
+                          className="secondary-button"
+                          disabled={selectedProviderCatalogBusy}
+                          onClick={() => void handleDiscoverOpenRouterModels()}
+                          type="button"
+                        >
+                          {selectedProviderCatalogBusy ? "Refreshing..." : "Refresh Catalog"}
+                        </button>
+                      </div>
+
+                      <div className="catalog-summary-row">
+                        <span className="state-pill accent">
+                          {openRouterCatalog ? `${openRouterCatalog.models.length} models` : "No live catalog yet"}
+                        </span>
+                        <span className="state-pill is-done">
+                          {openRouterCatalog ? `${openRouterCatalog.freeCount} free` : "Refresh to list free models"}
+                        </span>
+                      </div>
+
+                      {providerCatalogError ? <div className="workflow-warning">{providerCatalogError}</div> : null}
+
+                      {openRouterCatalog ? (
+                        <div className="catalog-list">
+                          {openRouterFreeModels.map((model) => (
+                            <button
+                              className={`catalog-list-item ${
+                                selectedProfile.preferredModelId === model.id ? "is-active" : ""
+                              }`}
+                              key={model.id}
+                              onClick={() => updateSelectedProvider({ preferredModelId: model.id })}
+                              type="button"
+                            >
+                              <div className="catalog-list-copy">
+                                <strong>{model.label}</strong>
+                                <span>{model.id}</span>
+                              </div>
+                              <div className="catalog-list-tags">
+                                <span className="signal-pill">{`${Math.round(model.maxContextWindow / 1024)}k context`}</span>
+                                <span className="state-pill is-done">free</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div className="settings-field">
                     <label className="field-label" htmlFor={`provider-key-${selectedProfile.provider}`}>

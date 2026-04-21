@@ -135,6 +135,7 @@ Already implemented:
 - workflow execution queues for recommended build and repair steps
 - Monaco-backed code editing with language-aware file models
 - xterm-based terminal sessions with live command output and run switching
+- live OpenRouter catalog discovery with current free-model filtering
 
 Not finished yet:
 
