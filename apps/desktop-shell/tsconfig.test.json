@@ -11,5 +11,11 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/shell-state.ts", "src/shell-state.test.ts"]
+  "include": [
+    "src/shell-state.ts",
+    "src/shell-state.test.ts",
+    "src/settings-state.ts",
+    "src/settings-state.test.ts",
+    "src/test-suite.ts"
+  ]
 }

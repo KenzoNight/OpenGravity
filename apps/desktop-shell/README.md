@@ -7,6 +7,7 @@ Near-term goals:
 - keep shell concerns separate from runtime concerns
 - make OpenGravity panels easy to iterate on
 - avoid coupling core logic to a specific UI implementation too early
+- keep provider and model setup available without crowding the main workbench
 
 Target shape:
 
@@ -21,3 +22,10 @@ Run paths:
 - `npm run app:dev` from the repo root launches the native Tauri shell
 - `npm run app:check` from the repo root verifies the Rust/Tauri layer
 - `npm run app:web-build` from the repo root builds the frontend bundle only
+
+Current shell prototype includes:
+
+- workbench-style window chrome, explorer, editor column, and agent dock
+- setup-required state when no provider is configured
+- provider settings overlay for BYOK, active model selection, and fallback controls
+- desktop-safe local persistence for prototype settings

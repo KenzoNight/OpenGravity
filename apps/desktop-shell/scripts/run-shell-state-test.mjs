@@ -7,9 +7,9 @@ import { build } from "esbuild";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(currentDir, "..");
-const entryFile = resolve(appDir, "src", "shell-state.test.ts");
+const entryFile = resolve(appDir, "src", "test-suite.ts");
 const outputDir = resolve(appDir, ".test-dist");
-const outputFile = resolve(outputDir, "shell-state.test.mjs");
+const outputFile = resolve(outputDir, "desktop-shell.test.mjs");
 
 mkdirSync(outputDir, { recursive: true });
 

@@ -49,7 +49,8 @@ Current status:
 - early alpha repository
 - core continuity, routing, orchestration, and build-intelligence packages are testable
 - desktop shell exists as an early Tauri-based workbench prototype
-- production-ready editing, terminal integration, and provider settings are still in progress
+- provider settings and BYOK routing controls now exist as an early desktop shell prototype
+- production-ready editing, terminal integration, secure secret storage, and command execution are still in progress
 
 ## For Developers
 
@@ -126,12 +127,13 @@ Already implemented:
 - task graph orchestration
 - session ledger persistence
 - an early native desktop shell
+- an early provider settings and API key management surface
 
 Not finished yet:
 
 - Monaco editor integration
 - terminal integration
-- provider settings and API key management UI
+- native secret vault for provider credentials
 - real workspace file editing
 - command execution bridge
 - full agent manager workflows
