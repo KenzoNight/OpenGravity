@@ -19,6 +19,8 @@
     "src/native-bridge.ts",
     "src/workspace-state.ts",
     "src/workspace-state.test.ts",
+    "src/workflow-state.ts",
+    "src/workflow-state.test.ts",
     "src/test-suite.ts"
   ]
 }

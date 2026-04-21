@@ -58,6 +58,16 @@ import {
   type WorkspaceDocument,
   type WorkspaceCommandPreset
 } from "./workspace-state";
+import {
+  applyWorkflowCommandResult,
+  applyWorkflowEvent,
+  cancelWorkflowRun,
+  createWorkflowRun,
+  getNextQueuedWorkflowItem,
+  getWorkflowProgress,
+  markWorkflowItemRunning,
+  type WorkflowRun
+} from "./workflow-state";
 import "./styles.css";
 
 declare global {
@@ -218,6 +228,18 @@ function createTerminalSession(started: WorkspaceCommandStarted): TerminalSessio
   };
 }
 
+function createTerminalSessionFromResult(result: WorkspaceCommandResult): TerminalSession {
+  return {
+    runId: `fallback-${Date.now()}`,
+    command: result.command,
+    status: result.success ? "completed" : "failed",
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+    durationMs: result.durationMs
+  };
+}
+
 function appendTerminalLine(existing: string, nextLine?: string): string {
   if (!nextLine) {
     return existing;
@@ -305,6 +327,8 @@ export default function App() {
   const [activeTerminalRunId, setActiveTerminalRunId] = useState<string | null>(null);
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
+  const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
+  const [workflowDispatchBusy, setWorkflowDispatchBusy] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
   const [explorerQuery, setExplorerQuery] = useState("");
 
@@ -336,6 +360,7 @@ export default function App() {
 
       startTransition(() => {
         setTerminalSessions((current) => applyWorkspaceCommandEvent(current, payload));
+        setWorkflowRun((current) => (current ? applyWorkflowEvent(current, payload) : current));
 
         if (payload.kind === "completed" || payload.kind === "cancelled" || payload.kind === "launch-failed") {
           setActiveTerminalRunId((current) => (current === payload.runId ? null : current));
@@ -367,6 +392,7 @@ export default function App() {
   }, [selectedProvider, settings.providerProfiles]);
 
   const snapshot = useMemo(() => buildDesktopShellSnapshot(shellHealth, settings), [shellHealth, settings]);
+  const workflowTemplate = useMemo(() => createWorkflowRun(snapshot.executionPlan), [snapshot.executionPlan]);
   const filteredWorkspaceFiles = useMemo(
     () => filterWorkspaceFiles(workspace.files, explorerQuery),
     [explorerQuery, workspace.files]
@@ -399,6 +425,7 @@ export default function App() {
   const dirtyDocumentCount = getDirtyWorkspaceDocumentCount(openDocuments);
   const terminalBusy = activeTerminalRunId !== null;
   const activeTerminalSession = terminalSessions.find((session) => session.runId === activeTerminalRunId) ?? null;
+  const workflowProgress = workflowRun ? getWorkflowProgress(workflowRun) : null;
   const workbenchClassName = [
     "workbench",
     !explorerOpen && "is-explorer-collapsed",
@@ -408,10 +435,44 @@ export default function App() {
     .join(" ");
 
   useEffect(() => {
+    setWorkflowRun(workflowTemplate);
+  }, [workflowTemplate]);
+
+  useEffect(() => {
     if (!terminalInput && commandPresets[0]) {
       setTerminalInput(commandPresets[0].command);
     }
   }, [commandPresets, terminalInput]);
+
+  useEffect(() => {
+    if (!workflowRun || workflowRun.status !== "running" || workflowRun.currentRunId || terminalBusy || workflowDispatchBusy) {
+      return;
+    }
+
+    const nextItem = getNextQueuedWorkflowItem(workflowRun);
+    if (!nextItem) {
+      return;
+    }
+
+    setWorkflowDispatchBusy(true);
+    void launchCommand(nextItem.command, nextItem.id).finally(() => {
+      setWorkflowDispatchBusy(false);
+    });
+  }, [terminalBusy, workflowDispatchBusy, workflowRun]);
+
+  useEffect(() => {
+    if (!workflowRun || workflowRun.currentRunId) {
+      return;
+    }
+
+    if (workflowRun.status === "completed") {
+      setWorkspaceNotice("Recommended workflow completed.");
+    } else if (workflowRun.status === "failed") {
+      setWorkspaceNotice("Recommended workflow stopped after a failed step.");
+    } else if (workflowRun.status === "cancelled") {
+      setWorkspaceNotice("Recommended workflow was cancelled.");
+    }
+  }, [workflowRun]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -495,10 +556,10 @@ export default function App() {
     }
   };
 
-  const handleRunCommand = async (command: string) => {
+  const launchCommand = async (command: string, workflowItemId?: string) => {
     const trimmed = command.trim();
     if (!trimmed) {
-      return;
+      return false;
     }
 
     setBottomView("terminal");
@@ -510,24 +571,30 @@ export default function App() {
       startTransition(() => {
         setActiveTerminalRunId(started.runId);
         setTerminalSessions((current) => [createTerminalSession(started), ...current].slice(0, 12));
+        if (workflowItemId) {
+          setWorkflowRun((current) => (current ? markWorkflowItemRunning(current, workflowItemId, started.runId) : current));
+        }
       });
+
+      return true;
     } catch {
       const result = await runWorkspaceCommand(trimmed);
-      const fallbackSession: TerminalSession = {
-        runId: `fallback-${Date.now()}`,
-        command: result.command,
-        status: result.success ? "completed" : "failed",
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.exitCode,
-        durationMs: result.durationMs
-      };
+      const fallbackSession = createTerminalSessionFromResult(result);
 
       startTransition(() => {
         setTerminalSessions((current) => [fallbackSession, ...current].slice(0, 12));
         setWorkspaceNotice(result.success ? `Command finished: ${trimmed}` : `Command failed: ${trimmed}`);
+        if (workflowItemId) {
+          setWorkflowRun((current) => (current ? applyWorkflowCommandResult(current, workflowItemId, result) : current));
+        }
       });
+
+      return result.success;
     }
+  };
+
+  const handleRunCommand = async (command: string) => {
+    await launchCommand(command);
   };
 
   const handleCancelActiveCommand = async () => {
@@ -536,6 +603,9 @@ export default function App() {
     }
 
     try {
+      if (workflowRun?.status === "running") {
+        setWorkflowRun((current) => (current ? cancelWorkflowRun(current) : current));
+      }
       await cancelWorkspaceCommand(activeTerminalRunId);
       setWorkspaceNotice(`Cancelling ${activeTerminalSession?.command ?? activeTerminalRunId}`);
     } catch {
@@ -546,6 +616,26 @@ export default function App() {
   const runPreset = async (preset: WorkspaceCommandPreset) => {
     setTerminalInput(preset.command);
     await handleRunCommand(preset.command);
+  };
+
+  const handleStartWorkflow = () => {
+    if (terminalBusy || workflowDispatchBusy) {
+      return;
+    }
+
+    setBottomView("build");
+    setBottomOpen(true);
+    setWorkflowRun(createWorkflowRun(snapshot.executionPlan));
+    setWorkspaceNotice("Queued the recommended workflow.");
+  };
+
+  const handleResetWorkflow = () => {
+    if (terminalBusy) {
+      return;
+    }
+
+    setWorkflowRun(createWorkflowRun(snapshot.executionPlan));
+    setWorkspaceNotice("Workflow state reset.");
   };
 
   const updateSelectedProvider = (
@@ -651,17 +741,89 @@ export default function App() {
           <>
             <div className="bottom-panel-header">
               <span className="section-label">Execution plan</span>
-              <span className="dock-chip">{snapshot.executionPlan.primaryBuildSystem ?? "inspect"}</span>
+              <div className="build-toolbar">
+                <span className="dock-chip">{snapshot.executionPlan.primaryBuildSystem ?? "inspect"}</span>
+                <button
+                  className="secondary-button slim-button"
+                  disabled={terminalBusy || workflowDispatchBusy}
+                  onClick={() => handleResetWorkflow()}
+                  type="button"
+                >
+                  Reset
+                </button>
+                <button
+                  className="primary-button slim-button"
+                  disabled={terminalBusy || workflowDispatchBusy || snapshot.setupRequired}
+                  onClick={() => handleStartWorkflow()}
+                  type="button"
+                >
+                  Run plan
+                </button>
+              </div>
             </div>
             <div className="drawer-content">
+              <div className="workflow-summary-card">
+                <div className="workflow-summary-head">
+                  <strong>Recommended workflow</strong>
+                  <span
+                    className={`state-pill ${
+                      workflowRun?.status === "completed"
+                        ? "is-done"
+                        : workflowRun?.status === "failed"
+                          ? "is-failed"
+                          : workflowRun?.status === "cancelled"
+                            ? "is-blocked"
+                            : "is-running"
+                    }`}
+                  >
+                    {workflowRun?.status ?? "running"}
+                  </span>
+                </div>
+                <div className="workflow-summary-copy">
+                  {workflowProgress
+                    ? `${workflowProgress.completed}/${workflowProgress.total} commands completed`
+                    : "No workflow state"}
+                </div>
+                {snapshot.setupRequired ? (
+                  <div className="workflow-warning">
+                    Connect a provider first so the recommended repair workflow can continue with the same session.
+                  </div>
+                ) : null}
+              </div>
+
               <div className="compact-list">
-                {snapshot.executionPlan.steps.map((step) => (
-                  <div className="compact-row" key={`${step.kind}-${step.label}`}>
+                {(workflowRun?.items ?? []).map((item) => (
+                  <div className="workflow-row" key={item.id}>
                     <div className="compact-copy">
-                      <strong>{step.label}</strong>
-                      <span>{step.commands.join(" | ")}</span>
+                      <strong>{item.label}</strong>
+                      <span>{item.command}</span>
                     </div>
-                    <span className="signal-pill">{step.kind}</span>
+                    <div className="workflow-row-right">
+                      <span className="signal-pill">{item.kind}</span>
+                      <span
+                        className={`state-pill ${
+                          item.status === "completed"
+                            ? "is-done"
+                            : item.status === "running"
+                              ? "is-running"
+                              : item.status === "cancelled"
+                                ? "is-blocked"
+                                : item.status === "failed"
+                                  ? "is-failed"
+                                  : "is-waiting"
+                        }`}
+                      >
+                        {item.status}
+                      </span>
+                      <button
+                        className="secondary-button slim-button"
+                        disabled={terminalBusy || workflowDispatchBusy}
+                        onClick={() => void handleRunCommand(item.command)}
+                        type="button"
+                      >
+                        Queue
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1113,6 +1275,26 @@ export default function App() {
                   {snapshot.setupRequired
                     ? "Connect a provider, choose the active model, and resume the same session without resetting context."
                     : "Continue the compile-repair loop, compact context, or switch models without leaving the active session."}
+                </div>
+                <div className="composer-actions">
+                  <button
+                    className="primary-button slim-button"
+                    disabled={snapshot.setupRequired || terminalBusy || workflowDispatchBusy}
+                    onClick={() => handleStartWorkflow()}
+                    type="button"
+                  >
+                    Run suggested plan
+                  </button>
+                  <button
+                    className="secondary-button slim-button"
+                    onClick={() => {
+                      setBottomView("terminal");
+                      setBottomOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Open terminal
+                  </button>
                 </div>
                 <div className="composer-footer">
                   <span>{settings.autoHandoff ? "Auto handoff on" : "Auto handoff off"}</span>

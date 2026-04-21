@@ -50,6 +50,7 @@ Current status:
 - core continuity, routing, orchestration, and build-intelligence packages are testable
 - desktop shell includes a real Tauri workspace file bridge and command bridge
 - provider settings and BYOK routing controls now exist as an early desktop shell prototype
+- recommended execution plans can now run step-by-step from the desktop shell with tracked workflow state
 - production-ready editing, terminal integration, secure secret storage, and command execution are still in progress
 
 ## For Developers
@@ -131,6 +132,7 @@ Already implemented:
 - workspace file reading and saving through Tauri commands
 - desktop command execution with a guarded allowlist
 - streaming command sessions with cancel support
+- workflow execution queues for recommended build and repair steps
 
 Not finished yet:
 

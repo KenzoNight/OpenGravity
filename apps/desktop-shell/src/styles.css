@@ -510,6 +510,12 @@ button {
   background: var(--panel-2);
 }
 
+.build-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .drawer-content {
   height: calc(100% - 41px);
   overflow: auto;
@@ -650,6 +656,12 @@ button {
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.02);
   color: #d9e4ee;
+}
+
+.composer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .composer-footer {
@@ -991,6 +1003,54 @@ button {
   color: var(--muted);
   font-size: 0.8rem;
   text-align: center;
+}
+
+.workflow-summary-card,
+.workflow-row {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.workflow-summary-card {
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.workflow-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workflow-summary-copy,
+.workflow-warning {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.workflow-summary-copy {
+  color: var(--muted);
+}
+
+.workflow-warning {
+  color: var(--warn);
+}
+
+.workflow-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.workflow-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .pane-scroll,
