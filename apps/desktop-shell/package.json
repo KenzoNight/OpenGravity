@@ -14,12 +14,14 @@
     "tauri:check": "node ./scripts/run-tauri.mjs check"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@opengravity/build-intelligence": "0.1.0",
     "@opengravity/model-router": "0.1.0",
     "@opengravity/orchestrator": "0.1.0",
     "@opengravity/session-core": "0.1.0",
     "@opengravity/shared-types": "0.1.0",
     "@tauri-apps/api": "^2.8.0",
+    "monaco-editor": "^0.55.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

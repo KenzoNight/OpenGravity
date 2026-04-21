@@ -133,6 +133,7 @@ Already implemented:
 - desktop command execution with a guarded allowlist
 - streaming command sessions with cancel support
 - workflow execution queues for recommended build and repair steps
+- Monaco-backed code editing with language-aware file models
 
 Not finished yet:
 

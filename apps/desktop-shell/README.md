@@ -30,6 +30,7 @@ Current shell prototype includes:
 - provider settings overlay for BYOK, active model selection, and fallback controls
 - desktop-safe local persistence for prototype settings
 - workspace file loading and saving through Tauri commands
+- Monaco editor integration with file-aware language detection
 - guarded workspace command execution inside the native shell
 - streaming command output cards with cancel support
 - workflow execution tracking for recommended build and repair plans

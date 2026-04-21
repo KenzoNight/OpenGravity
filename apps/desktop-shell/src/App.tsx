@@ -1,3 +1,5 @@
+import Editor, { loader } from "@monaco-editor/react";
+import * as monaco from "monaco-editor";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
 import type {
@@ -7,6 +9,12 @@ import type {
   TaskStatus
 } from "@opengravity/shared-types";
 
+import {
+  configureOpenGravityTheme,
+  countDocumentLines,
+  detectEditorLanguage,
+  formatEditorLanguageLabel
+} from "./editor-state";
 import {
   browserFallbackWorkspace,
   cancelWorkspaceCommand,
@@ -70,6 +78,8 @@ import {
 } from "./workflow-state";
 import "./styles.css";
 
+loader.config({ monaco });
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -104,6 +114,20 @@ const activityItems = [
   { id: "AR", label: "Artifacts" },
   { id: "SR", label: "Search" }
 ];
+
+const editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = {
+  automaticLayout: true,
+  fontFamily: '"Cascadia Code", Consolas, monospace',
+  fontLigatures: true,
+  fontSize: 13,
+  minimap: { enabled: false },
+  padding: { top: 14 },
+  renderLineHighlight: "line",
+  renderWhitespace: "selection",
+  scrollBeyondLastLine: false,
+  smoothScrolling: true,
+  tabSize: 2
+};
 
 function loadWorkbenchSettings(): WorkbenchSettings {
   const defaults = createDefaultWorkbenchSettings(desktopShellModels);
@@ -419,6 +443,9 @@ export default function App() {
   const runningTask = snapshot.tasks.find((task) => task.status === "running");
   const activeModelLabel = activeLiveModel?.label ?? "Setup required";
   const activeDocument = getWorkspaceDocument(openDocuments, activeFilePath);
+  const activeDocumentLanguage = detectEditorLanguage(activeFilePath);
+  const activeDocumentLanguageLabel = formatEditorLanguageLabel(activeDocumentLanguage);
+  const activeDocumentLineCount = countDocumentLines(activeDocument?.currentContent ?? "");
   const editorDirty = activeDocument
     ? isDocumentDirty(activeDocument.savedContent, activeDocument.currentContent)
     : false;
@@ -1144,7 +1171,8 @@ export default function App() {
             <div className="editor-toolbar">
               <div className="breadcrumbs">{activeFilePath || "No file selected"}</div>
               <div className="editor-toolbar-right">
-                <span className="editor-badge">{workspaceBusy ? "Loading" : "Workspace"}</span>
+                <span className="editor-badge">{workspaceBusy ? "Loading" : activeDocumentLanguageLabel}</span>
+                <span className="editor-badge">{`${activeDocumentLineCount} lines`}</span>
                 <span className={`editor-badge ${editorDirty ? "" : "accent"}`}>
                   {editorDirty ? "Unsaved" : "Saved"}
                 </span>
@@ -1178,16 +1206,23 @@ export default function App() {
                 </div>
               ) : null}
 
-              <textarea
-                className="code-editor-textarea"
-                onChange={(event) =>
-                  setOpenDocuments((current) =>
-                    updateWorkspaceDocumentContent(current, activeFilePath, event.target.value)
-                  )
-                }
-                spellCheck={false}
-                value={activeDocument?.currentContent ?? ""}
-              />
+              <div className="monaco-editor-shell">
+                <Editor
+                  beforeMount={configureOpenGravityTheme}
+                  language={activeDocumentLanguage}
+                  loading={<div className="editor-loading-state">Preparing editor</div>}
+                  onChange={(value) =>
+                    setOpenDocuments((current) =>
+                      updateWorkspaceDocumentContent(current, activeFilePath, value ?? "")
+                    )
+                  }
+                  options={editorOptions}
+                  path={activeFilePath || "untitled.txt"}
+                  saveViewState
+                  theme="opengravity-dark"
+                  value={activeDocument?.currentContent ?? ""}
+                />
+              </div>
             </div>
           </section>
 
@@ -1345,6 +1380,7 @@ export default function App() {
       <footer className="statusbar">
         <span>{workspace.rootPath}</span>
         <span>{activeFilePath || "No file selected"}</span>
+        <span>{activeDocumentLanguageLabel}</span>
         <span>{dirtyDocumentCount > 0 ? `${dirtyDocumentCount} dirty buffers` : "All buffers saved"}</span>
         <span>{readyProviders.length} providers ready</span>
       </footer>

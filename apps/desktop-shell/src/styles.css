@@ -441,24 +441,27 @@ button {
   white-space: pre;
 }
 
-.code-editor-textarea {
-  width: 100%;
+.monaco-editor-shell {
+  min-height: 0;
   height: 100%;
-  margin: 0;
-  padding: 20px 22px;
-  border: 0;
-  resize: none;
-  overflow: auto;
   background: #071019;
-  color: #f4f7ff;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 0.92rem;
-  line-height: 1.55;
-  white-space: pre;
+  overflow: hidden;
 }
 
-.code-editor-textarea:focus {
-  outline: none;
+.monaco-editor-shell .monaco-editor,
+.monaco-editor-shell .overflow-guard {
+  border-radius: 0;
+}
+
+.editor-loading-state {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  background: #071019;
+  color: #8fb2c9;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .bottom-drawer {
