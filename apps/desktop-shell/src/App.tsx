@@ -82,9 +82,24 @@ import {
 } from "./chat-state";
 import {
   extractAgentActionPlan,
+  type AgentActionPlan,
   type AgentActionStatus,
   type AgentSuggestedAction
 } from "./agent-action-state";
+import {
+  createDefaultPermissionSettings,
+  evaluateAgentActionPermission,
+  getPermissionDecisionLabel,
+  getPermissionProfileDescription,
+  getPermissionProfileLabel,
+  getPermissionSettingsStorageKey,
+  normalizePermissionSettings,
+  permissionProfiles,
+  serializePermissionSettings,
+  type AgentPermissionSettings,
+  type PermissionAction,
+  type PermissionProfile
+} from "./permission-state";
 import {
   fetchOpenRouterCatalog,
   mergeModelCatalog,
@@ -193,6 +208,8 @@ const activityItems: Array<{ id: WorkbenchPrimaryView; shortLabel: string; label
   { id: "search", shortLabel: "SR", label: "Search" }
 ];
 
+const approvalProfiles = permissionProfiles;
+
 const editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = {
   automaticLayout: true,
   fontFamily: '"Cascadia Code", Consolas, monospace',
@@ -278,6 +295,24 @@ function loadWorkbenchUiState() {
   }
 }
 
+function loadPermissionSettings(workspaceRoot: string): AgentPermissionSettings {
+  const defaults = createDefaultPermissionSettings();
+  if (typeof window === "undefined" || !window.localStorage) {
+    return defaults;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(getPermissionSettingsStorageKey(workspaceRoot));
+    if (!rawValue) {
+      return defaults;
+    }
+
+    return normalizePermissionSettings(JSON.parse(rawValue));
+  } catch {
+    return defaults;
+  }
+}
+
 function isExternalDocumentPath(path: string): boolean {
   return /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\") || path.startsWith("/");
 }
@@ -356,6 +391,32 @@ const agentTone = (status: AgentStatus): string => {
   }
 };
 
+const actionStatusTone = (status: AgentActionStatus): string => {
+  switch (status) {
+    case "running":
+      return taskTone("running");
+    case "completed":
+      return taskTone("completed");
+    case "blocked":
+      return taskTone("blocked");
+    case "failed":
+      return taskTone("failed");
+    default:
+      return taskTone("queued");
+  }
+};
+
+const permissionDecisionTone = (decision: PermissionAction): string => {
+  switch (decision) {
+    case "allow":
+      return "is-done";
+    case "deny":
+      return "is-blocked";
+    case "ask":
+      return "is-waiting";
+  }
+};
+
 function buildExplorerGroups(paths: string[]): ExplorerGroup[] {
   const groups = new Map<string, string[]>();
 
@@ -425,11 +486,18 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => createDefaultChatSession().messages);
   const [chatHistoryReady, setChatHistoryReady] = useState(false);
   const [loadedChatHistoryKey, setLoadedChatHistoryKey] = useState("");
+  const [permissionSettings, setPermissionSettings] = useState<AgentPermissionSettings>(() =>
+    loadPermissionSettings(browserFallbackWorkspace.rootPath)
+  );
   const [agentActionStatuses, setAgentActionStatuses] = useState<Record<string, AgentActionStatus>>({});
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowDispatchBusy, setWorkflowDispatchBusy] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState("Loading workspace...");
   const [explorerQuery, setExplorerQuery] = useState("");
+  const permissionSettingsKey = useMemo(
+    () => getPermissionSettingsStorageKey(workspace.rootPath || browserFallbackWorkspace.rootPath),
+    [workspace.rootPath]
+  );
   const chatHistoryKey = useMemo(
     () => getChatHistoryStorageKey(workspace.rootPath || browserFallbackWorkspace.rootPath),
     [workspace.rootPath]
@@ -544,6 +612,18 @@ export default function App() {
     sideView,
     statusBarOpen
   ]);
+
+  useEffect(() => {
+    setPermissionSettings(loadPermissionSettings(workspace.rootPath || browserFallbackWorkspace.rootPath));
+  }, [permissionSettingsKey, workspace.rootPath]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+
+    window.localStorage.setItem(permissionSettingsKey, serializePermissionSettings(permissionSettings));
+  }, [permissionSettings, permissionSettingsKey]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.localStorage) {
@@ -1592,7 +1672,25 @@ export default function App() {
     setWorkspaceNotice("Cleared chat history for this workspace.");
   };
 
-  const handleApplyAgentAction = async (action: AgentSuggestedAction) => {
+  const handleApplyAgentAction = async (
+    action: AgentSuggestedAction,
+    options?: {
+      bypassPermission?: boolean;
+      source?: "manual" | "auto";
+    }
+  ): Promise<boolean> => {
+    const permissionDecision = evaluateAgentActionPermission(action, permissionSettings);
+    if (!options?.bypassPermission && permissionDecision === "deny") {
+      setAgentActionStatuses((current) => ({
+        ...current,
+        [action.id]: "blocked"
+      }));
+      setWorkspaceNotice(
+        `${action.label} is blocked by the ${getPermissionProfileLabel(permissionSettings.profile)} approval profile.`
+      );
+      return false;
+    }
+
     setAgentActionStatuses((current) => ({
       ...current,
       [action.id]: "running"
@@ -1625,7 +1723,8 @@ export default function App() {
         ...current,
         [action.id]: "completed"
       }));
-      setWorkspaceNotice(action.label);
+      setWorkspaceNotice(options?.source === "auto" ? `Auto-ran ${action.label}.` : action.label);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : `Failed to apply ${action.label}.`;
       setAgentActionStatuses((current) => ({
@@ -1633,6 +1732,63 @@ export default function App() {
         [action.id]: "failed"
       }));
       setWorkspaceNotice(message);
+      return false;
+    }
+  };
+
+  const autoApplyAgentActionPlan = async (actionPlan?: AgentActionPlan) => {
+    if (!actionPlan || chatMode !== "agent" || settings.parallelAgentMode) {
+      return;
+    }
+
+    let autoApplied = 0;
+    let waitingForReview = 0;
+    let blocked = 0;
+    let activeActionStarted = false;
+
+    for (const action of actionPlan.actions) {
+      const permissionDecision = evaluateAgentActionPermission(action, permissionSettings);
+
+      if (permissionDecision === "deny") {
+        blocked += 1;
+        setAgentActionStatuses((current) => ({
+          ...current,
+          [action.id]: "blocked"
+        }));
+        continue;
+      }
+
+      if (permissionDecision === "ask" || activeActionStarted) {
+        waitingForReview += 1;
+        continue;
+      }
+
+      const applied = await handleApplyAgentAction(action, {
+        bypassPermission: true,
+        source: "auto"
+      });
+
+      if (applied) {
+        autoApplied += 1;
+        if (action.type !== "open_file") {
+          activeActionStarted = true;
+        }
+      }
+    }
+
+    const summary: string[] = [];
+    if (autoApplied > 0) {
+      summary.push(`${autoApplied} safe action${autoApplied === 1 ? "" : "s"} auto-ran`);
+    }
+    if (waitingForReview > 0) {
+      summary.push(`${waitingForReview} action${waitingForReview === 1 ? "" : "s"} waiting for review`);
+    }
+    if (blocked > 0) {
+      summary.push(`${blocked} blocked by the ${getPermissionProfileLabel(permissionSettings.profile)} profile`);
+    }
+
+    if (summary.length > 0) {
+      setWorkspaceNotice(summary.join(". ") + ".");
     }
   };
 
@@ -1737,10 +1893,11 @@ export default function App() {
           const target = parallelTargets[index]!;
           if (result.status === "fulfilled") {
             const parsedResponse = extractAgentActionPlan(result.value.content);
+            const actionPlan = chatMode === "agent" ? parsedResponse.actionPlan : undefined;
             nextMessages.push(
               createChatMessage("assistant", parsedResponse.cleanContent || result.value.content, {
                 accountLabel: `${target.roleLabel} · ${result.value.accountLabel}`,
-                actionPlan: parsedResponse.actionPlan,
+                actionPlan,
                 agentRole: target.roleLabel,
                 modelId: result.value.modelId
               })
@@ -1785,18 +1942,23 @@ export default function App() {
           sessionId: snapshot.sessionId
         });
         const parsedResponse = extractAgentActionPlan(response.content);
+        const actionPlan = chatMode === "agent" ? parsedResponse.actionPlan : undefined;
 
         startTransition(() => {
           setChatMessages((current) => [
             ...current,
             createChatMessage("assistant", parsedResponse.cleanContent || response.content, {
               accountLabel: response.accountLabel,
-              actionPlan: parsedResponse.actionPlan,
+              actionPlan,
               modelId: response.modelId
             })
           ]);
           setWorkspaceNotice(`Chat response received from ${response.accountLabel}.`);
         });
+
+        if (actionPlan) {
+          void autoApplyAgentActionPlan(actionPlan);
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Chat request failed.";
@@ -2712,6 +2874,28 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+
+                  <div className="chat-toolbar-field">
+                    <span className="field-label">Action approvals</span>
+                    <select
+                      className="settings-input chat-compact-input"
+                      onChange={(event) =>
+                        setPermissionSettings({
+                          profile: event.target.value as PermissionProfile
+                        })
+                      }
+                      value={permissionSettings.profile}
+                    >
+                      {approvalProfiles.map((profile) => (
+                        <option key={profile} value={profile}>
+                          {getPermissionProfileLabel(profile)}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="field-help approval-help">
+                      {getPermissionProfileDescription(permissionSettings.profile)}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="chat-toolbar-actions">
@@ -2868,7 +3052,8 @@ export default function App() {
                           </div>
                           <div className="chat-action-list">
                             {message.actionPlan.actions.map((action) => {
-                              const actionStatus = agentActionStatuses[action.id] ?? "idle";
+                              const permissionDecision = evaluateAgentActionPermission(action, permissionSettings);
+                              const actionStatus = agentActionStatuses[action.id] ?? (permissionDecision === "deny" ? "blocked" : "idle");
                               return (
                                 <div className="chat-action-row" key={action.id}>
                                   <div className="compact-copy">
@@ -2883,20 +3068,25 @@ export default function App() {
                                     </span>
                                   </div>
                                   <div className="chat-action-row-right">
-                                    <span className={`state-pill ${taskTone(actionStatus === "idle" ? "queued" : actionStatus === "running" ? "running" : actionStatus === "completed" ? "completed" : "failed")}`}>
+                                    <span className={`state-pill ${permissionDecisionTone(permissionDecision)}`}>
+                                      {getPermissionDecisionLabel(permissionDecision)}
+                                    </span>
+                                    <span className={`state-pill ${actionStatusTone(actionStatus)}`}>
                                       {actionStatus}
                                     </span>
                                     <button
                                       className="secondary-button slim-button"
-                                      disabled={actionStatus === "running"}
+                                      disabled={actionStatus === "running" || permissionDecision === "deny"}
                                       onClick={() => void handleApplyAgentAction(action)}
                                       type="button"
                                     >
-                                      {action.type === "open_file"
-                                        ? "Open"
-                                        : action.type === "run_command"
-                                          ? "Run"
-                                          : "Start"}
+                                      {permissionDecision === "deny"
+                                        ? "Blocked"
+                                        : action.type === "open_file"
+                                          ? "Open"
+                                          : action.type === "run_command"
+                                            ? "Run"
+                                            : "Start"}
                                     </button>
                                   </div>
                                 </div>
@@ -3825,3 +4015,10 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+

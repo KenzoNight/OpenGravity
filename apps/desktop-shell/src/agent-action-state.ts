@@ -1,5 +1,5 @@
 export type AgentActionType = "open_file" | "run_command" | "run_workflow";
-export type AgentActionStatus = "idle" | "running" | "completed" | "failed";
+export type AgentActionStatus = "idle" | "running" | "completed" | "failed" | "blocked";
 
 export interface AgentSuggestedAction {
   id: string;
@@ -134,3 +134,4 @@ export function extractAgentActionPlan(content: string): ParsedAgentActionPlan {
     };
   }
 }
+

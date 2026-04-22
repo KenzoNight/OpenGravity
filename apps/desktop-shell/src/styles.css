@@ -807,6 +807,10 @@ button {
   min-width: 0;
 }
 
+.approval-help {
+  margin-top: 6px;
+}
+
 .chat-toolbar-inline,
 .chat-toolbar-actions,
 .quick-connect-actions {
@@ -947,6 +951,11 @@ button {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-action-row-right {
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .chat-action-list {
@@ -1548,3 +1557,4 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
