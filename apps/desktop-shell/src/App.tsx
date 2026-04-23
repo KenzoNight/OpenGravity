@@ -87,14 +87,17 @@ import {
   type AgentSuggestedAction
 } from "./agent-action-state";
 import {
+  clearRememberedApprovals,
   createDefaultPermissionSettings,
   evaluateAgentActionPermission,
   getPermissionDecisionLabel,
   getPermissionProfileDescription,
   getPermissionProfileLabel,
   getPermissionSettingsStorageKey,
+  getRememberedApprovalCount,
   normalizePermissionSettings,
   permissionProfiles,
+  rememberAgentActionApproval,
   serializePermissionSettings,
   type AgentPermissionSettings,
   type PermissionAction,
@@ -105,6 +108,7 @@ import {
   mergeModelCatalog,
   type ProviderCatalogSnapshot
 } from "./provider-catalog";
+import { buildProviderRadar } from "./provider-radar-state";
 import { sendCompatibleChatCompletion } from "./openrouter-chat";
 import {
   buildParallelAgentTargets,
@@ -802,6 +806,11 @@ export default function App() {
       ? activeLiveModel.id
       : chatProfile?.preferredModelId ?? "";
   const chatProviderLabel = chatProfile?.label ?? "Provider";
+  const providerRadar = useMemo(
+    () => buildProviderRadar(settings, snapshot.providerHealth, snapshot.models),
+    [settings, snapshot.models, snapshot.providerHealth]
+  );
+  const rememberedApprovalCount = getRememberedApprovalCount(permissionSettings);
   const quickSetupProfile = selectedChatProfile;
   const quickSetupAccounts = quickSetupProfile ? getProviderAccounts(settings, quickSetupProfile.provider) : [];
   const quickSetupModels = quickSetupProfile ? getModelsForProvider(snapshot.models, quickSetupProfile.provider) : [];
@@ -1664,12 +1673,45 @@ export default function App() {
     setWorkspaceNotice(`${quickSetupProfile.label} is ready and saved locally for this workspace.`);
   };
 
+  const handleUseRecommendedProvider = () => {
+    const recommendedEntry = providerRadar.recommended ?? providerRadar.active;
+    if (!recommendedEntry) {
+      return;
+    }
+
+    setSelectedProvider(recommendedEntry.provider);
+    setSelectedAccountId(recommendedEntry.primaryAccountId);
+    setSettings((current) => {
+      let next = current;
+
+      if (recommendedEntry.primaryAccountId) {
+        next = setPrimaryProviderAccount(next, recommendedEntry.provider, recommendedEntry.primaryAccountId, snapshot.models);
+      }
+
+      if (recommendedEntry.preferredModelId.trim()) {
+        next = setActiveModel(next, recommendedEntry.preferredModelId, snapshot.models);
+      }
+
+      return next;
+    });
+    setWorkspaceNotice(`Focused ${recommendedEntry.label} as the best ready route for this workspace.`);
+  };
+
   const handleClearChatHistory = () => {
     const nextSession = createDefaultChatSession();
     setChatMode(nextSession.mode);
     setChatMessages(nextSession.messages);
     setAgentActionStatuses({});
     setWorkspaceNotice("Cleared chat history for this workspace.");
+  };
+
+  const handleTrustAgentAction = async (action: AgentSuggestedAction) => {
+    setPermissionSettings((current) => rememberAgentActionApproval(current, action));
+    setWorkspaceNotice(`${action.label} is now trusted for this workspace.`);
+    await handleApplyAgentAction(action, {
+      bypassPermission: true,
+      source: "manual"
+    });
   };
 
   const handleApplyAgentAction = async (
@@ -2880,9 +2922,10 @@ export default function App() {
                     <select
                       className="settings-input chat-compact-input"
                       onChange={(event) =>
-                        setPermissionSettings({
+                        setPermissionSettings((current) => ({
+                          ...current,
                           profile: event.target.value as PermissionProfile
-                        })
+                        }))
                       }
                       value={permissionSettings.profile}
                     >
@@ -2950,6 +2993,17 @@ export default function App() {
                   </button>
                   <button className="secondary-button slim-button" onClick={() => handleClearChatHistory()} type="button">
                     Clear history
+                  </button>
+                  <button
+                    className="secondary-button slim-button"
+                    disabled={rememberedApprovalCount === 0}
+                    onClick={() => {
+                      setPermissionSettings((current) => clearRememberedApprovals(current));
+                      setWorkspaceNotice("Cleared trusted action approvals for this workspace.");
+                    }}
+                    type="button"
+                  >
+                    Clear trusted actions
                   </button>
                 </div>
 
@@ -3074,6 +3128,16 @@ export default function App() {
                                     <span className={`state-pill ${actionStatusTone(actionStatus)}`}>
                                       {actionStatus}
                                     </span>
+                                    {permissionDecision === "ask" ? (
+                                      <button
+                                        className="secondary-button slim-button"
+                                        disabled={actionStatus === "running"}
+                                        onClick={() => void handleTrustAgentAction(action)}
+                                        type="button"
+                                      >
+                                        Trust
+                                      </button>
+                                    ) : null}
                                     <button
                                       className="secondary-button slim-button"
                                       disabled={actionStatus === "running" || permissionDecision === "deny"}
@@ -3151,6 +3215,62 @@ export default function App() {
                       ? `${settings.concurrentAgentCount} parallel lane${settings.concurrentAgentCount === 1 ? "" : "s"}`
                       : "Single response mode"}
                   </span>
+                  <span>
+                    {rememberedApprovalCount > 0
+                      ? `${rememberedApprovalCount} trusted action${rememberedApprovalCount === 1 ? "" : "s"}`
+                      : "No trusted actions yet"}
+                  </span>
+                </div>
+
+                <div className="provider-radar-card">
+                  <div className="settings-section-headline">
+                    <div>
+                      <div className="section-label">Provider radar</div>
+                      <div className="settings-provider-copy">
+                        Borrowed from Antigravity-Manager: keep the best ready route, active route, and fallback visible.
+                      </div>
+                    </div>
+                    <button
+                      className="secondary-button slim-button"
+                      disabled={!providerRadar.recommended}
+                      onClick={() => handleUseRecommendedProvider()}
+                      type="button"
+                    >
+                      Use recommended
+                    </button>
+                  </div>
+
+                  <div className="provider-radar-grid">
+                    <div className="summary-card">
+                      <strong>{providerRadar.recommended?.label ?? "No recommended route yet"}</strong>
+                      <p>
+                        {providerRadar.recommended
+                          ? `${providerRadar.recommended.preferredModelLabel} · ${providerRadar.recommended.readyAccountCount} ready account${providerRadar.recommended.readyAccountCount === 1 ? "" : "s"}`
+                          : "Connect a provider account to unlock smart routing recommendations."}
+                      </p>
+                      <span className={`state-pill ${providerRadar.recommended ? permissionDecisionTone("allow") : "is-waiting"}`}>
+                        {providerRadar.recommended?.connectionLabel ?? "setup required"}
+                      </span>
+                    </div>
+
+                    <div className="summary-card">
+                      <strong>{providerRadar.active?.label ?? "No active route"}</strong>
+                      <p>
+                        {providerRadar.active
+                          ? `${providerRadar.active.preferredModelLabel} · ${providerRadar.active.healthReason}`
+                          : "The active route appears after a provider and model are ready."}
+                      </p>
+                      <span className={`state-pill ${providerRadar.active ? permissionDecisionTone("ask") : "is-waiting"}`}>
+                        {providerRadar.active?.healthState ?? "idle"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="provider-radar-footer">
+                    <span>{`${providerRadar.readyProviderCount} provider${providerRadar.readyProviderCount === 1 ? "" : "s"} ready`}</span>
+                    <span>{`${providerRadar.readyAccountCount} account${providerRadar.readyAccountCount === 1 ? "" : "s"} ready`}</span>
+                    <span>{providerRadar.fallback ? `Fallback: ${providerRadar.fallback.label}` : "No fallback route yet"}</span>
+                  </div>
                 </div>
               </div>
             </section>
@@ -4015,6 +4135,10 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
 
 
 

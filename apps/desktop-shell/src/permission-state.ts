@@ -6,12 +6,14 @@ export type PermissionSubject = AgentSuggestedAction["type"];
 
 export interface AgentPermissionSettings {
   profile: PermissionProfile;
+  rememberedApprovals: string[];
 }
 
 export const permissionProfiles: PermissionProfile[] = ["cautious", "balanced", "auto-safe"];
 export const permissionSettingsStoragePrefix = "opengravity.agent-permissions.v1";
 
 const validProfiles = new Set<PermissionProfile>(permissionProfiles);
+const rememberedWorkflowPattern = "workflow:recommended";
 const cautiousAllowPatterns = [
   "pwd",
   "pwd *",
@@ -66,6 +68,31 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ");
 }
 
+function normalizeRememberedApprovals(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const next: string[] = [];
+
+  for (const entry of input) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+
+    const normalized = normalizeCommand(entry);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    next.push(normalized);
+  }
+
+  return next.slice(0, 24);
+}
+
 function isAllowedCommand(command: string, profile: PermissionProfile): boolean {
   const patterns =
     profile === "cautious"
@@ -79,9 +106,21 @@ function isDeniedCommand(command: string): boolean {
   return denyPatterns.some((pattern) => matchesPattern(command, pattern));
 }
 
+function getApprovalPatternForAction(action: AgentSuggestedAction): string {
+  switch (action.type) {
+    case "open_file":
+      return "";
+    case "run_command":
+      return normalizeCommand(action.command ?? "");
+    case "run_workflow":
+      return action.workflow === "recommended" ? rememberedWorkflowPattern : "";
+  }
+}
+
 export function createDefaultPermissionSettings(): AgentPermissionSettings {
   return {
-    profile: "balanced"
+    profile: "balanced",
+    rememberedApprovals: []
   };
 }
 
@@ -97,7 +136,8 @@ export function normalizePermissionSettings(input: unknown): AgentPermissionSett
     profile:
       typeof value.profile === "string" && validProfiles.has(value.profile as PermissionProfile)
         ? (value.profile as PermissionProfile)
-        : defaults.profile
+        : defaults.profile,
+    rememberedApprovals: normalizeRememberedApprovals(value.rememberedApprovals)
   };
 }
 
@@ -143,6 +183,40 @@ export function getPermissionDecisionLabel(decision: PermissionAction): string {
   }
 }
 
+export function getRememberedApprovalCount(settings: AgentPermissionSettings): number {
+  return settings.rememberedApprovals.length;
+}
+
+export function clearRememberedApprovals(settings: AgentPermissionSettings): AgentPermissionSettings {
+  return {
+    ...settings,
+    rememberedApprovals: []
+  };
+}
+
+export function isRememberedApproval(
+  settings: AgentPermissionSettings,
+  action: AgentSuggestedAction
+): boolean {
+  const pattern = getApprovalPatternForAction(action);
+  return Boolean(pattern) && settings.rememberedApprovals.includes(pattern);
+}
+
+export function rememberAgentActionApproval(
+  settings: AgentPermissionSettings,
+  action: AgentSuggestedAction
+): AgentPermissionSettings {
+  const pattern = getApprovalPatternForAction(action);
+  if (!pattern || settings.rememberedApprovals.includes(pattern)) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    rememberedApprovals: [pattern, ...settings.rememberedApprovals].slice(0, 24)
+  };
+}
+
 export function evaluatePermission(
   subject: PermissionSubject,
   target: string,
@@ -152,7 +226,9 @@ export function evaluatePermission(
     case "open_file":
       return "allow";
     case "run_workflow":
-      return settings.profile === "auto-safe" ? "allow" : "ask";
+      return settings.rememberedApprovals.includes(rememberedWorkflowPattern) || settings.profile === "auto-safe"
+        ? "allow"
+        : "ask";
     case "run_command": {
       const normalizedCommand = normalizeCommand(target);
       if (!normalizedCommand) {
@@ -161,6 +237,10 @@ export function evaluatePermission(
 
       if (isDeniedCommand(normalizedCommand)) {
         return "deny";
+      }
+
+      if (settings.rememberedApprovals.includes(normalizedCommand)) {
+        return "allow";
       }
 
       return isAllowedCommand(normalizedCommand, settings.profile) ? "allow" : "ask";
