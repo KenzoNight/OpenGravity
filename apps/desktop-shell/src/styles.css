@@ -1583,3 +1583,57 @@ button {
 }
 
 
+
+.source-control-radar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.source-control-meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.approval-rules-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.approval-rule-toolbar {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 112px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.approval-rule-pattern {
+  min-width: 0;
+}
+
+.approval-rule-examples {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.approval-rule-examples code {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+@media (max-width: 1480px) {
+  .source-control-radar {
+    grid-template-columns: 1fr;
+  }
+
+  .approval-rule-toolbar {
+    grid-template-columns: 1fr;
+  }
+}

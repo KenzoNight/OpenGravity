@@ -37,6 +37,17 @@ export interface RepositoryInsight {
   detail: string;
 }
 
+export interface RepositoryRadar {
+  readiness: "ready" | "review" | "blocked";
+  readinessLabel: string;
+  summary: string;
+  totalChanges: number;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  conflictedCount: number;
+}
+
 export interface ParsedRepositorySnapshot {
   available: boolean;
   workspaceRoot: string;
@@ -50,6 +61,7 @@ export interface ParsedRepositorySnapshot {
   commitSuggestion: string;
   nextActions: string[];
   insights: RepositoryInsight[];
+  radar: RepositoryRadar;
 }
 
 function normalizePathFromStatus(rawPath: string): string {
@@ -277,6 +289,66 @@ export function suggestCommitMessage(changes: RepositoryChange[]): string {
   return `${type}(${scope}): ${summary}`;
 }
 
+export function buildRepositoryRadar(changes: RepositoryChange[], branch: string): RepositoryRadar {
+  const stagedCount = changes.filter((change) => change.staged).length;
+  const unstagedCount = changes.filter((change) => change.unstaged).length;
+  const untrackedCount = changes.filter((change) => change.kind === "untracked").length;
+  const conflictedCount = changes.filter((change) => change.kind === "conflicted").length;
+
+  if (conflictedCount > 0) {
+    return {
+      readiness: "blocked",
+      readinessLabel: "Blocked",
+      summary: `Resolve ${conflictedCount} conflicted file${conflictedCount === 1 ? "" : "s"} before the next commit on ${branch}.`,
+      totalChanges: changes.length,
+      stagedCount,
+      unstagedCount,
+      untrackedCount,
+      conflictedCount
+    };
+  }
+
+  if (changes.length === 0) {
+    return {
+      readiness: "ready",
+      readinessLabel: "Clean",
+      summary: `${branch} is clean and ready for the next coding session.`,
+      totalChanges: 0,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0
+    };
+  }
+
+  if (stagedCount > 0 && unstagedCount === 0 && untrackedCount === 0) {
+    return {
+      readiness: "ready",
+      readinessLabel: "Ready to commit",
+      summary: `${stagedCount} staged file${stagedCount === 1 ? "" : "s"} are ready for a commit on ${branch}.`,
+      totalChanges: changes.length,
+      stagedCount,
+      unstagedCount,
+      untrackedCount,
+      conflictedCount: 0
+    };
+  }
+
+  return {
+    readiness: "review",
+    readinessLabel: "Needs review",
+    summary:
+      untrackedCount > 0
+        ? `${untrackedCount} untracked file${untrackedCount === 1 ? "" : "s"} still need staging or cleanup before you ship ${branch}.`
+        : `${changes.length} local change${changes.length === 1 ? "" : "s"} still need review before the next commit on ${branch}.`,
+    totalChanges: changes.length,
+    stagedCount,
+    unstagedCount,
+    untrackedCount,
+    conflictedCount: 0
+  };
+}
+
 function buildInsights(
   changes: RepositoryChange[],
   githubRemote: GitHubRemote | null,
@@ -394,12 +466,13 @@ export function parseRepositorySnapshot(payload: RepositorySnapshotPayload): Par
     .map((line) => parseRecentCommitLine(line))
     .filter((entry): entry is RepositoryCommit => Boolean(entry));
   const githubRemote = parseGitHubRemote(payload.originUrl);
+  const branch = payload.branch || "detached";
 
   return {
     available: payload.available,
     workspaceRoot: payload.workspaceRoot,
     repositoryRoot: payload.repositoryRoot,
-    branch: payload.branch || "detached",
+    branch,
     originUrl: payload.originUrl,
     githubRemote,
     changes,
@@ -407,7 +480,8 @@ export function parseRepositorySnapshot(payload: RepositorySnapshotPayload): Par
     trackingSummary: parseTrackingSummary(payload.statusLines),
     commitSuggestion: suggestCommitMessage(changes),
     nextActions: buildNextActions(changes, githubRemote),
-    insights: buildInsights(changes, githubRemote, payload.branch || "detached")
+    insights: buildInsights(changes, githubRemote, branch),
+    radar: buildRepositoryRadar(changes, branch)
   };
 }
 

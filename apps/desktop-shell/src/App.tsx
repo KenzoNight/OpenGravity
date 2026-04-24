@@ -87,21 +87,28 @@ import {
   type AgentSuggestedAction
 } from "./agent-action-state";
 import {
+  appendPermissionRule,
+  clearPermissionRules,
   clearRememberedApprovals,
   createDefaultPermissionSettings,
   evaluateAgentActionPermission,
+  getCustomPermissionRuleCount,
   getPermissionDecisionLabel,
   getPermissionProfileDescription,
   getPermissionProfileLabel,
+  getPermissionRulePatternPlaceholder,
+  getPermissionRuleSubjectLabel,
   getPermissionSettingsStorageKey,
   getRememberedApprovalCount,
   normalizePermissionSettings,
   permissionProfiles,
   rememberAgentActionApproval,
+  removePermissionRule,
   serializePermissionSettings,
   type AgentPermissionSettings,
   type PermissionAction,
-  type PermissionProfile
+  type PermissionProfile,
+  type PermissionRuleSubject
 } from "./permission-state";
 import {
   fetchOpenRouterCatalog,
@@ -421,6 +428,17 @@ const permissionDecisionTone = (decision: PermissionAction): string => {
   }
 };
 
+const repositoryReadinessTone = (readiness: "ready" | "review" | "blocked"): string => {
+  switch (readiness) {
+    case "ready":
+      return "is-done";
+    case "blocked":
+      return "is-blocked";
+    case "review":
+      return "is-running";
+  }
+};
+
 function buildExplorerGroups(paths: string[]): ExplorerGroup[] {
   const groups = new Map<string, string[]>();
 
@@ -493,6 +511,9 @@ export default function App() {
   const [permissionSettings, setPermissionSettings] = useState<AgentPermissionSettings>(() =>
     loadPermissionSettings(browserFallbackWorkspace.rootPath)
   );
+  const [permissionRuleSubjectDraft, setPermissionRuleSubjectDraft] = useState<PermissionRuleSubject>("run_command");
+  const [permissionRulePatternDraft, setPermissionRulePatternDraft] = useState("");
+  const [permissionRuleActionDraft, setPermissionRuleActionDraft] = useState<PermissionAction>("allow");
   const [agentActionStatuses, setAgentActionStatuses] = useState<Record<string, AgentActionStatus>>({});
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowDispatchBusy, setWorkflowDispatchBusy] = useState(false);
@@ -811,6 +832,7 @@ export default function App() {
     [settings, snapshot.models, snapshot.providerHealth]
   );
   const rememberedApprovalCount = getRememberedApprovalCount(permissionSettings);
+  const customRuleCount = getCustomPermissionRuleCount(permissionSettings);
   const quickSetupProfile = selectedChatProfile;
   const quickSetupAccounts = quickSetupProfile ? getProviderAccounts(settings, quickSetupProfile.provider) : [];
   const quickSetupModels = quickSetupProfile ? getModelsForProvider(snapshot.models, quickSetupProfile.provider) : [];
@@ -845,6 +867,8 @@ export default function App() {
     : githubRemote
       ? "Refresh GitHub"
       : "No GitHub remote";
+  const highlightedPulls = githubSignals?.pulls.slice(0, 2) ?? [];
+  const highlightedIssues = githubSignals?.issues.slice(0, 3) ?? [];
   const normalizedSettings = useMemo(
     () => normalizeWorkbenchSettings(settings, modelCatalog),
     [modelCatalog, settings]
@@ -1135,6 +1159,173 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+
+                <div className="source-control-radar">
+                  <div className="summary-card">
+                    <strong>{repository.radar.readinessLabel}</strong>
+                    <p>{repository.radar.summary}</p>
+                    <span className={`state-pill ${repositoryReadinessTone(repository.radar.readiness)}`}>
+                      {repository.radar.totalChanges === 0 ? "clean" : `${repository.radar.totalChanges} changes`}
+                    </span>
+                  </div>
+
+                  <div className="summary-card">
+                    <strong>Working tree</strong>
+                    <p>
+                      {`${repository.radar.stagedCount} staged · ${repository.radar.unstagedCount} unstaged · ${repository.radar.untrackedCount} untracked`}
+                    </p>
+                    <span
+                      className={`state-pill ${
+                        repository.radar.conflictedCount > 0
+                          ? "is-blocked"
+                          : repository.radar.stagedCount > 0 && repository.radar.unstagedCount === 0
+                            ? "is-done"
+                            : "is-running"
+                      }`}
+                    >
+                      {repository.radar.conflictedCount > 0
+                        ? `${repository.radar.conflictedCount} conflicts`
+                        : repository.radar.stagedCount > 0 && repository.radar.unstagedCount === 0
+                          ? `${repository.radar.stagedCount} staged`
+                          : "review local changes"}
+                    </span>
+                  </div>
+
+                  <div className="summary-card">
+                    <strong>GitHub</strong>
+                    <p>
+                      {githubRemote
+                        ? `${githubRemote.owner}/${githubRemote.repo}`
+                        : "No GitHub remote detected for this workspace yet."}
+                    </p>
+                    <span className={`state-pill ${githubRemote ? "is-done" : "is-waiting"}`}>
+                      {githubSignalsLabel}
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="section-block compact-section-block">
+                <div className="settings-section-headline">
+                  <div>
+                    <div className="section-label">Commit plan</div>
+                    <div className="settings-provider-copy">
+                      Use the generated title as a starting point, then verify the ship path before you commit.
+                    </div>
+                  </div>
+                  <div className="settings-inline-actions">
+                    <button
+                      className="secondary-button slim-button"
+                      disabled={!repositoryHasChanges}
+                      onClick={() => void handleCopyCommitSuggestion()}
+                      type="button"
+                    >
+                      Copy commit title
+                    </button>
+                  </div>
+                </div>
+
+                <div className="summary-card">
+                  <strong>{repository.commitSuggestion}</strong>
+                  <p>{repository.insights[0]?.detail ?? "No commit insight is available yet."}</p>
+                  <div className="source-control-meta-grid">
+                    <span>{repository.trackingSummary}</span>
+                    <span>{repository.commits.length > 0 ? `${repository.commits.length} recent commits loaded` : "No recent commits yet"}</span>
+                  </div>
+                </div>
+
+                {repository.commits.length > 0 ? (
+                  <div className="compact-list compact-list-tight">
+                    {repository.commits.slice(0, 3).map((commit) => (
+                      <div className="compact-row" key={commit.sha}>
+                        <div className="compact-copy">
+                          <strong>{commit.summary}</strong>
+                          <span>{commit.shortSha}</span>
+                        </div>
+                        <span className="state-pill is-waiting">{commit.relativeTime || "recent"}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="section-block compact-section-block">
+                <div className="section-label">Repository radar</div>
+                <div className="compact-list compact-list-tight">
+                  {repository.insights.map((insight) => (
+                    <div className="compact-row" key={insight.title}>
+                      <div className="compact-copy">
+                        <strong>{insight.title}</strong>
+                        <span>{insight.detail}</span>
+                      </div>
+                      <span className={`state-pill ${insight.tone === "good" ? "is-done" : insight.tone === "warn" ? "is-blocked" : "is-running"}`}>
+                        {insight.tone}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="section-block compact-section-block">
+                <div className="section-label">Next actions</div>
+                <div className="compact-list compact-list-tight">
+                  {repository.nextActions.map((entry) => (
+                    <div className="compact-row" key={entry}>
+                      <div className="compact-copy">
+                        <strong>{entry}</strong>
+                        <span>Recommended ship step</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="section-block compact-section-block">
+                <div className="settings-section-headline">
+                  <div>
+                    <div className="section-label">GitHub signals</div>
+                    <div className="settings-provider-copy">
+                      Pull requests and issues stay visible here so you do not need a browser tab for basic repo awareness.
+                    </div>
+                  </div>
+                  <button
+                    className="secondary-button slim-button"
+                    disabled={!githubRemote || githubBusy}
+                    onClick={() => void handleRefreshGitHub()}
+                    type="button"
+                  >
+                    {githubBusy ? "Refreshing..." : "Refresh GitHub"}
+                  </button>
+                </div>
+                {githubError ? <div className="workflow-warning">{githubError}</div> : null}
+                {!githubRemote ? (
+                  <div className="settings-empty-state">No GitHub remote detected for this workspace.</div>
+                ) : highlightedPulls.length === 0 && highlightedIssues.length === 0 ? (
+                  <div className="settings-empty-state">Refresh GitHub to pull live pull requests and issues.</div>
+                ) : (
+                  <div className="compact-list compact-list-tight">
+                    {highlightedPulls.map((item) => (
+                      <div className="compact-row" key={`pull-${item.number}`}>
+                        <div className="compact-copy">
+                          <strong>{`PR #${item.number} · ${item.title}`}</strong>
+                          <span>{`${item.author} · ${item.updatedAt}`}</span>
+                        </div>
+                        <span className={`state-pill ${item.isDraft ? "is-running" : "is-done"}`}>
+                          {item.isDraft ? "draft" : item.state}
+                        </span>
+                      </div>
+                    ))}
+                    {highlightedIssues.map((item) => (
+                      <div className="compact-row" key={`issue-${item.number}`}>
+                        <div className="compact-copy">
+                          <strong>{`Issue #${item.number} · ${item.title}`}</strong>
+                          <span>{`${item.author} · ${item.updatedAt}`}</span>
+                        </div>
+                        <span className="state-pill is-waiting">{item.state}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
 
               <section className="section-block compact-section-block">
@@ -1153,43 +1344,12 @@ export default function App() {
                         <span className="compact-change-status">{change.statusCode.trim() || "M"}</span>
                         <div className="compact-copy">
                           <strong>{labelForFilePath(change.path)}</strong>
-                          <span>{change.path}</span>
+                          <span>{change.summary}</span>
                         </div>
                       </button>
                     ))}
                   </div>
                 )}
-              </section>
-
-              <section className="section-block compact-section-block">
-                <div className="section-label">GitHub</div>
-                {githubError ? <div className="workflow-warning">{githubError}</div> : null}
-                <div className="summary-line">
-                  <span>Remote</span>
-                  <strong>{githubRemote ? `${githubRemote.owner}/${githubRemote.repo}` : "Not connected"}</strong>
-                </div>
-                <div className="summary-line">
-                  <span>Open items</span>
-                  <strong>{githubSignalsLabel}</strong>
-                </div>
-                <div className="settings-inline-actions">
-                  <button
-                    className="secondary-button slim-button"
-                    disabled={!githubRemote || githubBusy}
-                    onClick={() => void handleRefreshGitHub()}
-                    type="button"
-                  >
-                    {githubBusy ? "Refreshing..." : "Refresh GitHub"}
-                  </button>
-                  <button
-                    className="secondary-button slim-button"
-                    disabled={!repositoryHasChanges}
-                    onClick={() => void handleCopyCommitSuggestion()}
-                    type="button"
-                  >
-                    Copy commit title
-                  </button>
-                </div>
               </section>
             </div>
           </>
@@ -1703,6 +1863,27 @@ export default function App() {
     setChatMessages(nextSession.messages);
     setAgentActionStatuses({});
     setWorkspaceNotice("Cleared chat history for this workspace.");
+  };
+
+  const handleAddPermissionRule = () => {
+    const trimmedPattern = permissionRulePatternDraft.trim();
+    if (!trimmedPattern) {
+      setWorkspaceNotice("Enter a command or workflow pattern before adding a rule.");
+      return;
+    }
+
+    setPermissionSettings((current) =>
+      appendPermissionRule(current, permissionRuleSubjectDraft, trimmedPattern, permissionRuleActionDraft)
+    );
+    setPermissionRulePatternDraft("");
+    setWorkspaceNotice(
+      `Added a ${getPermissionDecisionLabel(permissionRuleActionDraft)} ${getPermissionRuleSubjectLabel(permissionRuleSubjectDraft).toLowerCase()} rule for ${trimmedPattern}.`
+    );
+  };
+
+  const handleRemovePermissionRule = (ruleId: string) => {
+    setPermissionSettings((current) => removePermissionRule(current, ruleId));
+    setWorkspaceNotice("Removed the custom approval rule for this workspace.");
   };
 
   const handleTrustAgentAction = async (action: AgentSuggestedAction) => {
@@ -3220,6 +3401,11 @@ export default function App() {
                       ? `${rememberedApprovalCount} trusted action${rememberedApprovalCount === 1 ? "" : "s"}`
                       : "No trusted actions yet"}
                   </span>
+                  <span>
+                    {customRuleCount > 0
+                      ? `${customRuleCount} custom rule${customRuleCount === 1 ? "" : "s"}`
+                      : "Profile-only approvals"}
+                  </span>
                 </div>
 
                 <div className="provider-radar-card">
@@ -3271,6 +3457,95 @@ export default function App() {
                     <span>{`${providerRadar.readyAccountCount} account${providerRadar.readyAccountCount === 1 ? "" : "s"} ready`}</span>
                     <span>{providerRadar.fallback ? `Fallback: ${providerRadar.fallback.label}` : "No fallback route yet"}</span>
                   </div>
+                </div>
+
+                <div className="approval-rules-card">
+                  <div className="settings-section-headline">
+                    <div>
+                      <div className="section-label">Approval rules</div>
+                      <div className="settings-provider-copy">
+                        Workspace rules sit above the profile. Use them to always allow, review, or block specific command or workflow patterns.
+                      </div>
+                    </div>
+                    <div className="settings-inline-actions">
+                      <span className={`state-pill ${customRuleCount > 0 ? "is-done" : "is-waiting"}`}>
+                        {customRuleCount} custom
+                      </span>
+                      <button
+                        className="secondary-button slim-button"
+                        disabled={customRuleCount === 0}
+                        onClick={() => {
+                          setPermissionSettings((current) => clearPermissionRules(current));
+                          setWorkspaceNotice("Cleared custom approval rules for this workspace.");
+                        }}
+                        type="button"
+                      >
+                        Clear rules
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="approval-rule-toolbar">
+                    <select
+                      className="settings-input chat-mini-select"
+                      onChange={(event) => setPermissionRuleSubjectDraft(event.target.value as PermissionRuleSubject)}
+                      value={permissionRuleSubjectDraft}
+                    >
+                      <option value="run_command">Command</option>
+                      <option value="run_workflow">Workflow</option>
+                    </select>
+                    <input
+                      className="settings-input approval-rule-pattern"
+                      onChange={(event) => setPermissionRulePatternDraft(event.target.value)}
+                      placeholder={getPermissionRulePatternPlaceholder(permissionRuleSubjectDraft)}
+                      value={permissionRulePatternDraft}
+                    />
+                    <select
+                      className="settings-input chat-mini-select"
+                      onChange={(event) => setPermissionRuleActionDraft(event.target.value as PermissionAction)}
+                      value={permissionRuleActionDraft}
+                    >
+                      <option value="allow">Allow</option>
+                      <option value="ask">Ask</option>
+                      <option value="deny">Deny</option>
+                    </select>
+                    <button className="secondary-button slim-button" onClick={() => handleAddPermissionRule()} type="button">
+                      Add rule
+                    </button>
+                  </div>
+
+                  <div className="approval-rule-examples">
+                    Examples: <code>rg *</code>, <code>cmake *</code>, <code>recommended</code>
+                  </div>
+
+                  {customRuleCount === 0 ? (
+                    <div className="settings-empty-state">
+                      No custom rules yet. The active profile still blocks dangerous commands and auto-runs only what is safe.
+                    </div>
+                  ) : (
+                    <div className="compact-list compact-list-tight">
+                      {permissionSettings.customRules.map((rule) => (
+                        <div className="compact-row" key={rule.id}>
+                          <div className="compact-copy">
+                            <strong>{getPermissionRuleSubjectLabel(rule.subject)}</strong>
+                            <span>{rule.pattern}</span>
+                          </div>
+                          <div className="chat-action-row-right">
+                            <span className={`state-pill ${permissionDecisionTone(rule.action)}`}>
+                              {getPermissionDecisionLabel(rule.action)}
+                            </span>
+                            <button
+                              className="secondary-button slim-button"
+                              onClick={() => handleRemovePermissionRule(rule.id)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </section>
@@ -4135,6 +4410,16 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
 
 
 

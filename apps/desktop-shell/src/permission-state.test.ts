@@ -2,16 +2,22 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  appendPermissionRule,
+  clearPermissionRules,
   clearRememberedApprovals,
   createDefaultPermissionSettings,
   evaluateAgentActionPermission,
   evaluatePermission,
+  getCustomPermissionRuleCount,
   getPermissionDecisionLabel,
   getPermissionProfileDescription,
   getPermissionProfileLabel,
+  getPermissionRulePatternPlaceholder,
+  getPermissionRuleSubjectLabel,
   getPermissionSettingsStorageKey,
   normalizePermissionSettings,
-  rememberAgentActionApproval
+  rememberAgentActionApproval,
+  removePermissionRule
 } from "./permission-state.js";
 
 describe("permission-state", () => {
@@ -24,17 +30,28 @@ describe("permission-state", () => {
     };
 
     for (const profile of ["cautious", "balanced", "auto-safe"] as const) {
-      assert.equal(evaluateAgentActionPermission(action, { profile, rememberedApprovals: [] }), "allow");
+      assert.equal(
+        evaluateAgentActionPermission(action, { profile, rememberedApprovals: [], customRules: [] }),
+        "allow"
+      );
     }
   });
 
   it("allows safe build commands in balanced mode but not in cautious mode", () => {
     assert.equal(
-      evaluatePermission("run_command", "npm run test", { profile: "cautious", rememberedApprovals: [] }),
+      evaluatePermission("run_command", "npm run test", {
+        profile: "cautious",
+        rememberedApprovals: [],
+        customRules: []
+      }),
       "ask"
     );
     assert.equal(
-      evaluatePermission("run_command", "npm run test", { profile: "balanced", rememberedApprovals: [] }),
+      evaluatePermission("run_command", "npm run test", {
+        profile: "balanced",
+        rememberedApprovals: [],
+        customRules: []
+      }),
       "allow"
     );
   });
@@ -44,7 +61,8 @@ describe("permission-state", () => {
       assert.equal(
         evaluatePermission("run_command", "Remove-Item -Recurse dist", {
           profile,
-          rememberedApprovals: ["Remove-Item -Recurse dist"]
+          rememberedApprovals: ["Remove-Item -Recurse dist"],
+          customRules: [{ id: "rule-1", subject: "run_command", pattern: "Remove-Item *", action: "allow" }]
         }),
         "deny"
       );
@@ -53,17 +71,26 @@ describe("permission-state", () => {
 
   it("only auto-allows workflows in the auto-safe profile unless trusted", () => {
     assert.equal(
-      evaluatePermission("run_workflow", "recommended", { profile: "balanced", rememberedApprovals: [] }),
+      evaluatePermission("run_workflow", "recommended", {
+        profile: "balanced",
+        rememberedApprovals: [],
+        customRules: []
+      }),
       "ask"
     );
     assert.equal(
-      evaluatePermission("run_workflow", "recommended", { profile: "auto-safe", rememberedApprovals: [] }),
+      evaluatePermission("run_workflow", "recommended", {
+        profile: "auto-safe",
+        rememberedApprovals: [],
+        customRules: []
+      }),
       "allow"
     );
     assert.equal(
       evaluatePermission("run_workflow", "recommended", {
         profile: "balanced",
-        rememberedApprovals: ["workflow:recommended"]
+        rememberedApprovals: ["workflow:recommended"],
+        customRules: []
       }),
       "allow"
     );
@@ -84,26 +111,50 @@ describe("permission-state", () => {
     const commandAction = {
       id: "cmd-1",
       label: "Run tests",
-      command: "cmake --build build",
+      command: "custom-tool build",
       type: "run_command" as const
     };
 
     const remembered = rememberAgentActionApproval(createDefaultPermissionSettings(), commandAction);
-    assert.equal(
-      evaluateAgentActionPermission(commandAction, remembered),
-      "allow"
-    );
+    assert.equal(evaluateAgentActionPermission(commandAction, remembered), "allow");
 
     const cleared = clearRememberedApprovals(remembered);
-    assert.equal(
-      evaluateAgentActionPermission(commandAction, cleared),
-      "ask"
-    );
+    assert.equal(evaluateAgentActionPermission(commandAction, cleared), "ask");
   });
 
-  it("exposes human-readable profile copy", () => {
+  it("supports custom allow, ask, and deny rules for commands and workflows", () => {
+    let settings = createDefaultPermissionSettings();
+    settings = appendPermissionRule(settings, "run_command", "python *", "deny");
+    settings = appendPermissionRule(settings, "run_command", "npm run lint", "ask");
+    settings = appendPermissionRule(settings, "run_workflow", "recommended", "deny");
+
+    assert.equal(evaluatePermission("run_command", "python app.py", settings), "deny");
+    assert.equal(evaluatePermission("run_command", "npm run lint", settings), "ask");
+    assert.equal(evaluatePermission("run_workflow", "recommended", settings), "deny");
+    assert.equal(getCustomPermissionRuleCount(settings), 3);
+  });
+
+  it("removes and clears custom rules without touching remembered approvals", () => {
+    const base = rememberAgentActionApproval(createDefaultPermissionSettings(), {
+      id: "cmd-1",
+      label: "Run tests",
+      command: "custom-tool build",
+      type: "run_command" as const
+    });
+    const withRule = appendPermissionRule(base, "run_command", "cmake *", "allow");
+    const removed = removePermissionRule(withRule, withRule.customRules[0]?.id ?? "missing");
+    const cleared = clearPermissionRules(withRule);
+
+    assert.equal(removed.customRules.length, 0);
+    assert.equal(cleared.rememberedApprovals.length, 1);
+  });
+
+  it("exposes human-readable profile and rule copy", () => {
     assert.equal(getPermissionProfileLabel("balanced"), "Balanced");
     assert.match(getPermissionProfileDescription("balanced"), /safe read, build, and test/i);
     assert.equal(getPermissionDecisionLabel("ask"), "review");
+    assert.equal(getPermissionRuleSubjectLabel("run_command"), "Command");
+    assert.match(getPermissionRulePatternPlaceholder("run_workflow"), /recommended/i);
   });
 });
+

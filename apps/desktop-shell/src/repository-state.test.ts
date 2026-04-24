@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  buildRepositoryRadar,
   parseGitHubRemote,
   parseGitStatusLine,
   parseRepositorySnapshot,
@@ -64,6 +65,7 @@ describe("repository-state", () => {
     assert.equal(parsed.changes.length, 3);
     assert.equal(parsed.commits[0]?.shortSha, "1234567");
     assert.match(parsed.commitSuggestion, /^feat\(/);
+    assert.equal(parsed.radar.readiness, "review");
     assert.ok(parsed.nextActions.some((entry) => entry.includes("cargo test --offline")));
   });
 
@@ -80,5 +82,38 @@ describe("repository-state", () => {
     ]);
 
     assert.equal(suggestion, "feat(providers): expand provider routing");
+  });
+
+  it("marks blocked or ready commit states based on the working tree", () => {
+    const blocked = buildRepositoryRadar(
+      [
+        {
+          path: "apps/desktop-shell/src/App.tsx",
+          kind: "conflicted",
+          staged: false,
+          unstaged: false,
+          summary: "Conflict to resolve",
+          statusCode: "UU"
+        }
+      ],
+      "main"
+    );
+    const ready = buildRepositoryRadar(
+      [
+        {
+          path: "apps/desktop-shell/src/App.tsx",
+          kind: "modified",
+          staged: true,
+          unstaged: false,
+          summary: "Modified file staged for commit",
+          statusCode: "M "
+        }
+      ],
+      "main"
+    );
+
+    assert.equal(blocked.readiness, "blocked");
+    assert.equal(ready.readiness, "ready");
+    assert.match(ready.summary, /ready for a commit/i);
   });
 });

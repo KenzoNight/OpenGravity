@@ -3,16 +3,27 @@ import type { AgentSuggestedAction } from "./agent-action-state";
 export type PermissionAction = "ask" | "allow" | "deny";
 export type PermissionProfile = "cautious" | "balanced" | "auto-safe";
 export type PermissionSubject = AgentSuggestedAction["type"];
+export type PermissionRuleSubject = Extract<PermissionSubject, "run_command" | "run_workflow">;
+
+export interface PermissionRule {
+  id: string;
+  subject: PermissionRuleSubject;
+  pattern: string;
+  action: PermissionAction;
+}
 
 export interface AgentPermissionSettings {
   profile: PermissionProfile;
   rememberedApprovals: string[];
+  customRules: PermissionRule[];
 }
 
 export const permissionProfiles: PermissionProfile[] = ["cautious", "balanced", "auto-safe"];
-export const permissionSettingsStoragePrefix = "opengravity.agent-permissions.v1";
+export const permissionSettingsStoragePrefix = "opengravity.agent-permissions.v2";
 
 const validProfiles = new Set<PermissionProfile>(permissionProfiles);
+const validPermissionActions = new Set<PermissionAction>(["ask", "allow", "deny"]);
+const validPermissionRuleSubjects = new Set<PermissionRuleSubject>(["run_command", "run_workflow"]);
 const rememberedWorkflowPattern = "workflow:recommended";
 const cautiousAllowPatterns = [
   "pwd",
@@ -55,6 +66,12 @@ const denyPatterns = [
   "format *"
 ];
 
+let nextPermissionRuleId = 1;
+
+function createPermissionRuleId(): string {
+  return `permission-rule-${nextPermissionRuleId++}`;
+}
+
 function wildcardToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`, "i");
@@ -66,6 +83,18 @@ function matchesPattern(value: string, pattern: string): boolean {
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ");
+}
+
+function normalizeWorkflow(workflow: string): string {
+  return workflow.trim().toLowerCase();
+}
+
+function normalizeRulePattern(subject: PermissionRuleSubject, pattern: string): string {
+  return subject === "run_command" ? normalizeCommand(pattern) : normalizeWorkflow(pattern);
+}
+
+function normalizeRuleTarget(subject: PermissionRuleSubject, target: string): string {
+  return subject === "run_command" ? normalizeCommand(target) : normalizeWorkflow(target);
 }
 
 function normalizeRememberedApprovals(input: unknown): string[] {
@@ -93,6 +122,55 @@ function normalizeRememberedApprovals(input: unknown): string[] {
   return next.slice(0, 24);
 }
 
+function normalizePermissionRules(input: unknown): PermissionRule[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const next: PermissionRule[] = [];
+
+  for (const entry of input) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const value = entry as Partial<PermissionRule>;
+    const subject =
+      typeof value.subject === "string" && validPermissionRuleSubjects.has(value.subject as PermissionRuleSubject)
+        ? (value.subject as PermissionRuleSubject)
+        : null;
+    const action =
+      typeof value.action === "string" && validPermissionActions.has(value.action as PermissionAction)
+        ? (value.action as PermissionAction)
+        : null;
+
+    if (!subject || !action) {
+      continue;
+    }
+
+    const pattern = normalizeRulePattern(subject, typeof value.pattern === "string" ? value.pattern : "");
+    if (!pattern) {
+      continue;
+    }
+
+    const dedupeKey = `${subject}::${pattern}::${action}`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    next.push({
+      id: typeof value.id === "string" && value.id.trim() ? value.id.trim() : createPermissionRuleId(),
+      subject,
+      pattern,
+      action
+    });
+  }
+
+  return next.slice(0, 32);
+}
+
 function isAllowedCommand(command: string, profile: PermissionProfile): boolean {
   const patterns =
     profile === "cautious"
@@ -117,10 +195,35 @@ function getApprovalPatternForAction(action: AgentSuggestedAction): string {
   }
 }
 
+function findMatchingPermissionRule(
+  settings: AgentPermissionSettings,
+  subject: PermissionRuleSubject,
+  target: string
+): PermissionRule | undefined {
+  const normalizedTarget = normalizeRuleTarget(subject, target);
+  if (!normalizedTarget) {
+    return undefined;
+  }
+
+  for (let index = settings.customRules.length - 1; index >= 0; index -= 1) {
+    const rule = settings.customRules[index];
+    if (rule.subject !== subject) {
+      continue;
+    }
+
+    if (matchesPattern(normalizedTarget, rule.pattern)) {
+      return rule;
+    }
+  }
+
+  return undefined;
+}
+
 export function createDefaultPermissionSettings(): AgentPermissionSettings {
   return {
     profile: "balanced",
-    rememberedApprovals: []
+    rememberedApprovals: [],
+    customRules: []
   };
 }
 
@@ -137,7 +240,8 @@ export function normalizePermissionSettings(input: unknown): AgentPermissionSett
       typeof value.profile === "string" && validProfiles.has(value.profile as PermissionProfile)
         ? (value.profile as PermissionProfile)
         : defaults.profile,
-    rememberedApprovals: normalizeRememberedApprovals(value.rememberedApprovals)
+    rememberedApprovals: normalizeRememberedApprovals(value.rememberedApprovals),
+    customRules: normalizePermissionRules(value.customRules)
   };
 }
 
@@ -183,14 +287,43 @@ export function getPermissionDecisionLabel(decision: PermissionAction): string {
   }
 }
 
+export function getPermissionRuleSubjectLabel(subject: PermissionRuleSubject): string {
+  switch (subject) {
+    case "run_command":
+      return "Command";
+    case "run_workflow":
+      return "Workflow";
+  }
+}
+
+export function getPermissionRulePatternPlaceholder(subject: PermissionRuleSubject): string {
+  switch (subject) {
+    case "run_command":
+      return "Example: rg * or cmake *";
+    case "run_workflow":
+      return "Example: recommended";
+  }
+}
+
 export function getRememberedApprovalCount(settings: AgentPermissionSettings): number {
   return settings.rememberedApprovals.length;
+}
+
+export function getCustomPermissionRuleCount(settings: AgentPermissionSettings): number {
+  return settings.customRules.length;
 }
 
 export function clearRememberedApprovals(settings: AgentPermissionSettings): AgentPermissionSettings {
   return {
     ...settings,
     rememberedApprovals: []
+  };
+}
+
+export function clearPermissionRules(settings: AgentPermissionSettings): AgentPermissionSettings {
+  return {
+    ...settings,
+    customRules: []
   };
 }
 
@@ -217,6 +350,45 @@ export function rememberAgentActionApproval(
   };
 }
 
+export function appendPermissionRule(
+  settings: AgentPermissionSettings,
+  subject: PermissionRuleSubject,
+  pattern: string,
+  action: PermissionAction
+): AgentPermissionSettings {
+  const normalizedPattern = normalizeRulePattern(subject, pattern);
+  if (!normalizedPattern) {
+    return settings;
+  }
+
+  const nextRule: PermissionRule = {
+    id: createPermissionRuleId(),
+    subject,
+    pattern: normalizedPattern,
+    action
+  };
+
+  return {
+    ...settings,
+    customRules: [...settings.customRules, nextRule].slice(-32)
+  };
+}
+
+export function removePermissionRule(
+  settings: AgentPermissionSettings,
+  ruleId: string
+): AgentPermissionSettings {
+  const nextRules = settings.customRules.filter((rule) => rule.id !== ruleId);
+  if (nextRules.length === settings.customRules.length) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    customRules: nextRules
+  };
+}
+
 export function evaluatePermission(
   subject: PermissionSubject,
   target: string,
@@ -225,10 +397,21 @@ export function evaluatePermission(
   switch (subject) {
     case "open_file":
       return "allow";
-    case "run_workflow":
+    case "run_workflow": {
+      const normalizedWorkflow = normalizeRuleTarget("run_workflow", target);
+      if (!normalizedWorkflow) {
+        return "ask";
+      }
+
+      const matchingRule = findMatchingPermissionRule(settings, "run_workflow", normalizedWorkflow);
+      if (matchingRule) {
+        return matchingRule.action;
+      }
+
       return settings.rememberedApprovals.includes(rememberedWorkflowPattern) || settings.profile === "auto-safe"
         ? "allow"
         : "ask";
+    }
     case "run_command": {
       const normalizedCommand = normalizeCommand(target);
       if (!normalizedCommand) {
@@ -237,6 +420,11 @@ export function evaluatePermission(
 
       if (isDeniedCommand(normalizedCommand)) {
         return "deny";
+      }
+
+      const matchingRule = findMatchingPermissionRule(settings, "run_command", normalizedCommand);
+      if (matchingRule) {
+        return matchingRule.action;
       }
 
       if (settings.rememberedApprovals.includes(normalizedCommand)) {
