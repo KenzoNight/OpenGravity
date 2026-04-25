@@ -56,7 +56,7 @@ Current status:
 - Ask, Planning, and Agent chat modes now exist with mode-safe behavior
 - quick provider onboarding, quick model switching, workspace-scoped chat history, and persisted workbench layout now exist
 - Agent mode can now fan out to multiple accounts and providers at the same time through parallel chat lanes
-- agent responses can now emit structured UI actions that open files, run commands, or start the recommended workflow
+- agent responses can now emit structured UI actions that open files, run commands, start the recommended workflow, and apply reviewed exact-match file edits
 - external file drag-and-drop and user-defined local skill launching now exist in the desktop shell
 - desktop workbench menus and customize-layout controls now exist as part of the shell
 - production-ready secret storage, richer agent execution, and deeper terminal/runtime integration are still in progress
@@ -151,6 +151,7 @@ Already implemented:
 - workspace-scoped persistence for chat history and workbench layout
 - parallel agent chat lanes with role-based responses
 - structured action plans parsed from agent responses and mapped into editor, terminal, and workflow controls
+- reviewed exact-match file edits with before and after previews plus workspace chat audit messages
 - user-defined local skills for launching external tools such as reverse engineering utilities
 
 Not finished yet:

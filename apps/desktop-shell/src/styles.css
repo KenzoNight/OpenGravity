@@ -947,10 +947,18 @@ button {
 }
 
 .chat-action-row {
+  align-items: flex-start;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-action-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 10px;
 }
 
 .chat-action-row-right {
@@ -961,6 +969,62 @@ button {
 .chat-action-list {
   display: grid;
   gap: 8px;
+}
+
+.agent-edit-preview {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(83, 210, 246, 0.14);
+  border-radius: 12px;
+  background: rgba(8, 15, 22, 0.72);
+}
+
+.agent-edit-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-edit-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-edit-preview-block {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.agent-edit-preview-block pre {
+  margin: 0;
+  min-height: 72px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #081018;
+  color: #d6e6f1;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-edit-preview-block.is-after pre {
+  border-color: rgba(128, 237, 179, 0.22);
+  background: rgba(19, 39, 28, 0.78);
+}
+
+.agent-edit-preview-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .composer-actions {

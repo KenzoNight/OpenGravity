@@ -132,7 +132,7 @@ export function getChatModeDescription(mode: ChatMode): string {
     case "planning":
       return "Plan the work only. Do not write code, patches, or shell commands.";
     case "agent":
-      return "Reason like a coding agent. You may suggest concrete implementation steps and code.";
+      return "Reason like a coding agent. You may suggest concrete implementation steps and controlled file edits.";
   }
 }
 
@@ -201,7 +201,8 @@ export function buildChatSystemPrompt(
     "You may reason about concrete implementation details and propose code-level changes.",
     "However, you are still a chat response in this environment: do not claim to have edited files unless the UI explicitly tells you a change was applied.",
     'When you want the UI to act, append one final ```opengravity-actions code block with strict JSON only.',
-    'The JSON schema is {"summary":"...","actions":[{"type":"open_file","path":"..."},{"type":"run_command","command":"..."},{"type":"run_workflow","workflow":"recommended"}]}.',
+    'The JSON schema is {"summary":"...","actions":[{"type":"open_file","path":"..."},{"type":"replace_in_file","path":"...","findText":"...","replaceText":"..."},{"type":"run_command","command":"..."},{"type":"run_workflow","workflow":"recommended"}]}.',
+    "Only use replace_in_file when you can target one exact block safely. Prefer unique findText snippets over broad rewrites.",
     "Only include actions that are safe and relevant. Keep the normal explanation outside the JSON block.",
     activeFileSnippet
   ].join("\n\n");
@@ -241,3 +242,4 @@ export function buildProviderChatMessages(
 
   return messages;
 }
+

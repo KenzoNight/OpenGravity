@@ -7,17 +7,19 @@ import {
 } from "./agent-action-state.js";
 
 describe("agent-action-state", () => {
-  it("extracts a structured action plan from the assistant response", () => {
+  it("extracts structured open, run, and edit actions from the assistant response", () => {
     const parsed = extractAgentActionPlan(`Inspect the failing build first.
 
 \`\`\`opengravity-actions
-{"summary":"Use the editor and terminal next","actions":[{"type":"open_file","path":"CMakeLists.txt"},{"type":"run_command","command":"cmake --build build"}]}
+{"summary":"Use the editor and terminal next","actions":[{"type":"open_file","path":"CMakeLists.txt"},{"type":"run_command","command":"cmake --build build"},{"type":"replace_in_file","path":"src/main.rs","findText":"println!(\\\"hello\\\");","replaceText":"println!(\\\"hello world\\\");"}]}
 \`\`\``);
 
     assert.match(parsed.cleanContent, /Inspect the failing build first/i);
-    assert.equal(parsed.actionPlan?.actions.length, 2);
+    assert.equal(parsed.actionPlan?.actions.length, 3);
     assert.equal(parsed.actionPlan?.actions[0]?.type, "open_file");
     assert.equal(parsed.actionPlan?.actions[1]?.type, "run_command");
+    assert.equal(parsed.actionPlan?.actions[2]?.type, "replace_in_file");
+    assert.equal(parsed.actionPlan?.actions[2]?.replaceText, 'println!("hello world");');
   });
 
   it("rejects invalid or incomplete action payloads", () => {
@@ -25,6 +27,7 @@ describe("agent-action-state", () => {
       summary: "Broken plan",
       actions: [
         { type: "open_file" },
+        { type: "replace_in_file", path: "src/main.rs" },
         { type: "run_workflow", workflow: "recommended" }
       ]
     });
@@ -32,4 +35,22 @@ describe("agent-action-state", () => {
     assert.equal(plan?.actions.length, 1);
     assert.equal(plan?.actions[0]?.type, "run_workflow");
   });
+
+  it("keeps empty replacement text so deletions can be expressed safely", () => {
+    const plan = normalizeAgentActionPlan({
+      summary: "Delete a redundant line",
+      actions: [
+        {
+          type: "replace_in_file",
+          path: "src/main.rs",
+          findText: "println!(\"debug\");\n",
+          replaceText: ""
+        }
+      ]
+    });
+
+    assert.equal(plan?.actions[0]?.type, "replace_in_file");
+    assert.equal(plan?.actions[0]?.replaceText, "");
+  });
 });
+

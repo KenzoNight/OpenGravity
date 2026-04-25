@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  applySingleDocumentReplacement,
   buildWorkspaceCommandPresets,
   createWorkspaceDocument,
   createEditorTabList,
@@ -57,5 +58,20 @@ describe("workspace-state", () => {
     assert.equal(getDirtyWorkspaceDocumentCount(edited), 1);
     assert.equal(getDirtyWorkspaceDocumentCount(saved), 0);
     assert.deepEqual(filterWorkspaceFiles(["README.md", "package.json"], "read"), ["README.md"]);
+  });
+
+  it("applies a replacement only when the target block is unique", () => {
+    const applied = applySingleDocumentReplacement(
+      "alpha\nbeta\ngamma\n",
+      "beta\n",
+      "beta-updated\n"
+    );
+    const ambiguous = applySingleDocumentReplacement("same\nsame\n", "same", "changed");
+    const missing = applySingleDocumentReplacement("alpha", "beta", "gamma");
+
+    assert.equal(applied.status, "applied");
+    assert.equal(applied.status === "applied" ? applied.content : "", "alpha\nbeta-updated\ngamma\n");
+    assert.equal(ambiguous.status, "ambiguous");
+    assert.equal(missing.status, "not-found");
   });
 });

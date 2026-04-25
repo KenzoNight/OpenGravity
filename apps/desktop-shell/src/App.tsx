@@ -86,6 +86,7 @@ import {
   type AgentActionStatus,
   type AgentSuggestedAction
 } from "./agent-action-state";
+import { AgentActionPlanView } from "./AgentActionPlanView";
 import {
   appendPermissionRule,
   clearPermissionRules,
@@ -138,6 +139,7 @@ import {
   type ShellHealth
 } from "./shell-state";
 import {
+  applySingleDocumentReplacement,
   buildWorkspaceCommandPresets,
   createEditorTabList,
   createWorkspaceDocument,
@@ -1886,6 +1888,54 @@ export default function App() {
     setWorkspaceNotice("Removed the custom approval rule for this workspace.");
   };
 
+  const handleApplyFileEditAction = async (action: AgentSuggestedAction) => {
+    if (!action.path) {
+      throw new Error("Edit action is missing a target path.");
+    }
+
+    if (typeof action.findText !== "string") {
+      throw new Error("Edit action is missing the source text block.");
+    }
+
+    const existingDocument = getWorkspaceDocument(openDocuments, action.path);
+    const loadedFile = existingDocument
+      ? { path: action.path, content: existingDocument.currentContent }
+      : isExternalDocumentPath(action.path)
+        ? await readExternalFile(action.path)
+        : await readWorkspaceFile(action.path);
+    const replacement = applySingleDocumentReplacement(
+      loadedFile.content,
+      action.findText,
+      action.replaceText ?? ""
+    );
+
+    if (replacement.status !== "applied") {
+      if (replacement.status === "not-found") {
+        throw new Error(`Could not find the requested text block in ${loadedFile.path}.`);
+      }
+
+      throw new Error(
+        `The requested text block appears more than once in ${loadedFile.path}. Narrow the findText block before applying this edit.`
+      );
+    }
+
+    const nextContent = replacement.content;
+    const saved = isExternalDocumentPath(loadedFile.path)
+      ? await writeExternalFile(loadedFile.path, nextContent)
+      : await writeWorkspaceFile(loadedFile.path, nextContent);
+
+    startTransition(() => {
+      setActiveFilePath(saved.path);
+      setOpenDocuments((current) =>
+        upsertWorkspaceDocument(current, createWorkspaceDocument(saved.path, saved.content))
+      );
+      setChatMessages((current) => [
+        ...current,
+        createChatMessage("system", `Applied a reviewed agent edit to ${saved.path}.`)
+      ]);
+    });
+  };
+
   const handleTrustAgentAction = async (action: AgentSuggestedAction) => {
     setPermissionSettings((current) => rememberAgentActionApproval(current, action));
     setWorkspaceNotice(`${action.label} is now trusted for this workspace.`);
@@ -1927,6 +1977,9 @@ export default function App() {
           }
           await handleSelectFile(action.path);
           break;
+        case "replace_in_file":
+          await handleApplyFileEditAction(action);
+          break;
         case "run_command":
           if (!action.command) {
             throw new Error("Run command action is missing a command.");
@@ -1954,6 +2007,12 @@ export default function App() {
         ...current,
         [action.id]: "failed"
       }));
+      if (action.type === "replace_in_file") {
+        setChatMessages((current) => [
+          ...current,
+          createChatMessage("system", `Agent edit failed: ${message}`)
+        ]);
+      }
       setWorkspaceNotice(message);
       return false;
     }
@@ -3280,65 +3339,15 @@ export default function App() {
                       </div>
                       <div className="chat-message-body">{message.content}</div>
                       {message.actionPlan ? (
-                        <div className="chat-action-plan">
-                          <div className="chat-action-plan-head">
-                            <strong>{message.actionPlan.summary}</strong>
-                            <span className="signal-pill">{message.actionPlan.actions.length} actions</span>
-                          </div>
-                          <div className="chat-action-list">
-                            {message.actionPlan.actions.map((action) => {
-                              const permissionDecision = evaluateAgentActionPermission(action, permissionSettings);
-                              const actionStatus = agentActionStatuses[action.id] ?? (permissionDecision === "deny" ? "blocked" : "idle");
-                              return (
-                                <div className="chat-action-row" key={action.id}>
-                                  <div className="compact-copy">
-                                    <strong>{action.label}</strong>
-                                    <span>
-                                      {action.description ??
-                                        action.command ??
-                                        action.path ??
-                                        (action.workflow === "recommended"
-                                          ? "Run the recommended workflow"
-                                          : action.type)}
-                                    </span>
-                                  </div>
-                                  <div className="chat-action-row-right">
-                                    <span className={`state-pill ${permissionDecisionTone(permissionDecision)}`}>
-                                      {getPermissionDecisionLabel(permissionDecision)}
-                                    </span>
-                                    <span className={`state-pill ${actionStatusTone(actionStatus)}`}>
-                                      {actionStatus}
-                                    </span>
-                                    {permissionDecision === "ask" ? (
-                                      <button
-                                        className="secondary-button slim-button"
-                                        disabled={actionStatus === "running"}
-                                        onClick={() => void handleTrustAgentAction(action)}
-                                        type="button"
-                                      >
-                                        Trust
-                                      </button>
-                                    ) : null}
-                                    <button
-                                      className="secondary-button slim-button"
-                                      disabled={actionStatus === "running" || permissionDecision === "deny"}
-                                      onClick={() => void handleApplyAgentAction(action)}
-                                      type="button"
-                                    >
-                                      {permissionDecision === "deny"
-                                        ? "Blocked"
-                                        : action.type === "open_file"
-                                          ? "Open"
-                                          : action.type === "run_command"
-                                            ? "Run"
-                                            : "Start"}
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
+                        <AgentActionPlanView
+                          actionPlan={message.actionPlan}
+                          actionStatuses={agentActionStatuses}
+                          getActionStatusTone={actionStatusTone}
+                          getPermissionDecisionTone={permissionDecisionTone}
+                          onApplyAction={handleApplyAgentAction}
+                          onTrustAction={handleTrustAgentAction}
+                          permissionSettings={permissionSettings}
+                        />
                       ) : null}
                     </div>
                   ))}
@@ -4410,23 +4419,6 @@ export default function App() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

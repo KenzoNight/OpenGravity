@@ -35,6 +35,7 @@ describe("chat-state", () => {
     assert.equal(message.accountLabel, "OpenRouter A");
     assert.equal(message.modelId, "qwen/qwen3-coder:free");
     assert.match(getChatModeDescription("ask"), /Answer questions only/i);
+    assert.match(getChatModeDescription("agent"), /controlled file edits/i);
     assert.match(getChatComposerPlaceholder("agent"), /Ask the agent/i);
   });
 
@@ -75,6 +76,7 @@ describe("chat-state", () => {
     const agentPrompt = buildChatSystemPrompt("agent", snapshot, "README.md", "hello");
 
     assert.match(agentPrompt, /```opengravity-actions/i);
+    assert.match(agentPrompt, /replace_in_file/i);
     assert.match(agentPrompt, /run_command/i);
     assert.match(agentPrompt, /run_workflow/i);
   });

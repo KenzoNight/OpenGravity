@@ -10,6 +10,15 @@ export interface WorkspaceDocument {
   currentContent: string;
 }
 
+export type WorkspaceDocumentReplacementResult =
+  | {
+      status: "applied";
+      content: string;
+    }
+  | {
+      status: "not-found" | "ambiguous";
+    };
+
 const preferredFiles = [
   "apps/desktop-shell/src/App.tsx",
   "README.md",
@@ -62,6 +71,37 @@ export function updateWorkspaceDocumentContent(
         }
       : document
   );
+}
+
+export function applySingleDocumentReplacement(
+  content: string,
+  findText: string,
+  replaceText: string
+): WorkspaceDocumentReplacementResult {
+  if (!findText) {
+    return {
+      status: "not-found"
+    };
+  }
+
+  const firstIndex = content.indexOf(findText);
+  if (firstIndex === -1) {
+    return {
+      status: "not-found"
+    };
+  }
+
+  const secondIndex = content.indexOf(findText, firstIndex + findText.length);
+  if (secondIndex !== -1) {
+    return {
+      status: "ambiguous"
+    };
+  }
+
+  return {
+    status: "applied",
+    content: content.slice(0, firstIndex) + replaceText + content.slice(firstIndex + findText.length)
+  };
 }
 
 export function markWorkspaceDocumentSaved(
@@ -192,3 +232,5 @@ export function createEditorTabList(activeFilePath: string, fallbackTabs: string
 export function labelForFilePath(path: string): string {
   return basename(path);
 }
+
+

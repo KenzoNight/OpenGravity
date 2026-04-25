@@ -1,4 +1,4 @@
-export type AgentActionType = "open_file" | "run_command" | "run_workflow";
+export type AgentActionType = "open_file" | "run_command" | "run_workflow" | "replace_in_file";
 export type AgentActionStatus = "idle" | "running" | "completed" | "failed" | "blocked";
 
 export interface AgentSuggestedAction {
@@ -9,6 +9,8 @@ export interface AgentSuggestedAction {
   description?: string;
   path?: string;
   workflow?: "recommended";
+  findText?: string;
+  replaceText?: string;
 }
 
 export interface AgentActionPlan {
@@ -33,8 +35,14 @@ function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeVerbatimString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function normalizeActionType(value: unknown): AgentActionType | null {
-  return value === "open_file" || value === "run_command" || value === "run_workflow" ? value : null;
+  return value === "open_file" || value === "run_command" || value === "run_workflow" || value === "replace_in_file"
+    ? value
+    : null;
 }
 
 function createDefaultActionLabel(type: AgentActionType, pathOrCommand: string): string {
@@ -45,6 +53,8 @@ function createDefaultActionLabel(type: AgentActionType, pathOrCommand: string):
       return pathOrCommand ? `Run ${pathOrCommand}` : "Run command";
     case "run_workflow":
       return "Run recommended workflow";
+    case "replace_in_file":
+      return pathOrCommand ? `Edit ${pathOrCommand}` : "Apply file edit";
   }
 }
 
@@ -62,6 +72,8 @@ function normalizeAction(input: unknown, index: number): AgentSuggestedAction | 
   const path = normalizeString(value.path);
   const command = normalizeString(value.command);
   const workflow = value.workflow === "recommended" ? "recommended" : undefined;
+  const findText = normalizeVerbatimString(value.findText);
+  const replaceText = normalizeVerbatimString(value.replaceText);
 
   if (type === "open_file" && !path) {
     return null;
@@ -75,7 +87,18 @@ function normalizeAction(input: unknown, index: number): AgentSuggestedAction | 
     return null;
   }
 
-  const labelSeed = type === "open_file" ? path : type === "run_command" ? command : "recommended workflow";
+  if (type === "replace_in_file" && (!path || !findText)) {
+    return null;
+  }
+
+  const labelSeed =
+    type === "open_file"
+      ? path
+      : type === "run_command"
+        ? command
+        : type === "replace_in_file"
+          ? path
+          : "recommended workflow";
 
   return {
     id: normalizeString(value.id) || `agent-action-${index + 1}`,
@@ -84,7 +107,9 @@ function normalizeAction(input: unknown, index: number): AgentSuggestedAction | 
     command: command || undefined,
     description: normalizeString(value.description) || undefined,
     path: path || undefined,
-    workflow
+    workflow,
+    findText: type === "replace_in_file" ? findText : undefined,
+    replaceText: type === "replace_in_file" ? (replaceText ?? "") : undefined
   };
 }
 
@@ -134,4 +159,3 @@ export function extractAgentActionPlan(content: string): ParsedAgentActionPlan {
     };
   }
 }
-

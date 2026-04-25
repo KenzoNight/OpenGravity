@@ -188,6 +188,8 @@ function getApprovalPatternForAction(action: AgentSuggestedAction): string {
   switch (action.type) {
     case "open_file":
       return "";
+    case "replace_in_file":
+      return "";
     case "run_command":
       return normalizeCommand(action.command ?? "");
     case "run_workflow":
@@ -397,6 +399,8 @@ export function evaluatePermission(
   switch (subject) {
     case "open_file":
       return "allow";
+    case "replace_in_file":
+      return "ask";
     case "run_workflow": {
       const normalizedWorkflow = normalizeRuleTarget("run_workflow", target);
       if (!normalizedWorkflow) {
@@ -443,9 +447,12 @@ export function evaluateAgentActionPermission(
   switch (action.type) {
     case "open_file":
       return evaluatePermission("open_file", action.path ?? "", settings);
+    case "replace_in_file":
+      return evaluatePermission("replace_in_file", action.path ?? "", settings);
     case "run_command":
       return evaluatePermission("run_command", action.command ?? "", settings);
     case "run_workflow":
       return evaluatePermission("run_workflow", action.workflow ?? "", settings);
   }
 }
+

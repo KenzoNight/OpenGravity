@@ -37,6 +37,24 @@ describe("permission-state", () => {
     }
   });
 
+  it("requires review for edit actions in every profile", () => {
+    const action = {
+      id: "edit-1",
+      label: "Edit solver.cpp",
+      path: "src/solver.cpp",
+      findText: "return oldValue;",
+      replaceText: "return newValue;",
+      type: "replace_in_file" as const
+    };
+
+    for (const profile of ["cautious", "balanced", "auto-safe"] as const) {
+      assert.equal(
+        evaluateAgentActionPermission(action, { profile, rememberedApprovals: [], customRules: [] }),
+        "ask"
+      );
+    }
+  });
+
   it("allows safe build commands in balanced mode but not in cautious mode", () => {
     assert.equal(
       evaluatePermission("run_command", "npm run test", {
@@ -157,4 +175,5 @@ describe("permission-state", () => {
     assert.match(getPermissionRulePatternPlaceholder("run_workflow"), /recommended/i);
   });
 });
+
 
