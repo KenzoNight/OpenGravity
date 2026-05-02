@@ -50,6 +50,7 @@ Current status:
 - core continuity, routing, orchestration, and build-intelligence packages are testable
 - desktop shell includes a real Tauri workspace file bridge and command bridge
 - provider settings now support multi-account BYOK routing for the same provider
+- DeepSeek keys now work through a first-class OpenAI-compatible DeepSeek route
 - Gemini AI Studio keys now work through the desktop shell's OpenAI-compatible Gemini route
 - Groq keys now work through the desktop shell's OpenAI-compatible Groq route
 - recommended execution plans can now run step-by-step from the desktop shell with tracked workflow state
@@ -58,7 +59,8 @@ Current status:
 - Agent mode can now fan out to multiple accounts and providers at the same time through parallel chat lanes
 - agent responses can now emit structured UI actions that open files, run commands, start the recommended workflow, and apply reviewed exact-match file edits
 - workspace `AGENTS.md` instructions are now loaded into the desktop shell and injected into chat context
-- external file drag-and-drop and user-defined local skill launching now exist in the desktop shell
+- external file drag-and-drop, user-defined local skill launching, and local launcher validation now exist in the desktop shell
+- extra context directories can now be added without hardcoding so the agent can see files outside the repo root
 - desktop workbench menus and customize-layout controls now exist as part of the shell
 - production-ready secret storage, richer agent execution, and deeper terminal/runtime integration are still in progress
 
@@ -147,7 +149,7 @@ Already implemented:
 - xterm-based terminal sessions with live command output and run switching
 - live OpenRouter catalog discovery with current free-model filtering
 - mode-safe chat for Ask, Planning, and Agent flows
-- OpenAI-compatible chat routing for Gemini, Groq, OpenRouter, OpenAI, and custom endpoints
+- OpenAI-compatible chat routing for DeepSeek, Gemini, Groq, OpenRouter, OpenAI, and custom endpoints
 - quick-connect onboarding for API keys, model selection, and multi-account routing
 - workspace-scoped persistence for chat history and workbench layout
 - parallel agent chat lanes with role-based responses
@@ -155,6 +157,8 @@ Already implemented:
 - reviewed exact-match file edits with before and after previews plus workspace chat audit messages
 - Codex-inspired workspace instructions via `AGENTS.md`
 - user-defined local skills for launching external tools such as reverse engineering utilities
+- launcher readiness probes so the workbench can tell whether a local skill is actually runnable
+- extra context directories surfaced in the Explorer and agent prompt without repo-specific hardcoding
 
 Not finished yet:
 
@@ -170,6 +174,7 @@ Key documents:
 - [Architecture](docs/opengravity-v1-architecture.md)
 - [Master Plan](docs/master-plan.md)
 - [Hybrid Shell Decision](docs/adr-0001-hybrid-shell.md)
+- [Security Notes](docs/security-notes.md)
 - [Upstream Reuse Strategy](docs/upstream-reuse-strategy.md)
 
 ## Development Direction

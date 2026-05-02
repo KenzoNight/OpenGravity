@@ -190,6 +190,8 @@ function getApprovalPatternForAction(action: AgentSuggestedAction): string {
       return "";
     case "replace_in_file":
       return "";
+    case "launch_skill":
+      return action.skillId ? `skill:${action.skillId}` : "";
     case "run_command":
       return normalizeCommand(action.command ?? "");
     case "run_workflow":
@@ -401,6 +403,14 @@ export function evaluatePermission(
       return "allow";
     case "replace_in_file":
       return "ask";
+    case "launch_skill": {
+      const normalizedSkill = target.trim();
+      if (!normalizedSkill) {
+        return "ask";
+      }
+
+      return settings.rememberedApprovals.includes(`skill:${normalizedSkill}`) ? "allow" : "ask";
+    }
     case "run_workflow": {
       const normalizedWorkflow = normalizeRuleTarget("run_workflow", target);
       if (!normalizedWorkflow) {
@@ -449,6 +459,8 @@ export function evaluateAgentActionPermission(
       return evaluatePermission("open_file", action.path ?? "", settings);
     case "replace_in_file":
       return evaluatePermission("replace_in_file", action.path ?? "", settings);
+    case "launch_skill":
+      return evaluatePermission("launch_skill", action.skillId ?? "", settings);
     case "run_command":
       return evaluatePermission("run_command", action.command ?? "", settings);
     case "run_workflow":

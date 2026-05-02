@@ -18,6 +18,7 @@
     "test:watch": "npm run build && node --test --watch --test-isolation=none dist/packages/session-core/src/index.test.js dist/packages/model-router/src/index.test.js dist/packages/build-intelligence/src/index.test.js dist/services/orchestrator/src/index.test.js dist/services/orchestrator/src/persistence.test.js dist/services/orchestrator/src/runtime.test.js"
   },
   "devDependencies": {
+    "monaco-editor": "0.53.0",
     "@types/node": "^24.5.0",
     "typescript": "^5.9.3"
   }

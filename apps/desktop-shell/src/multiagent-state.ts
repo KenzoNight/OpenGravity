@@ -17,7 +17,14 @@ export interface ParallelAgentTarget {
   roleLabel: string;
 }
 
-const compatibleProviders = new Set<ModelProvider>(["gemini", "groq", "openrouter", "openai", "custom"]);
+const compatibleProviders = new Set<ModelProvider>([
+  "deepseek",
+  "gemini",
+  "groq",
+  "openrouter",
+  "openai",
+  "custom"
+]);
 const parallelRoleLabels = ["Architect", "Coder", "Reviewer", "Researcher", "Builder", "Tester"];
 
 function isCompatibleProvider(provider: ModelProvider): boolean {

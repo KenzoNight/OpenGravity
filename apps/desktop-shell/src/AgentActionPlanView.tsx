@@ -15,12 +15,16 @@ interface AgentActionPlanViewProps {
   permissionSettings: AgentPermissionSettings;
   getActionStatusTone: (status: AgentActionStatus) => string;
   getPermissionDecisionTone: (decision: PermissionAction) => string;
+  getSkillLabel?: (skillId: string) => string;
 }
 
-function describeAction(action: AgentSuggestedAction): string {
+function describeAction(action: AgentSuggestedAction, getSkillLabel?: (skillId: string) => string): string {
   return (
     action.description ??
     action.command ??
+    (action.type === "launch_skill" && action.skillId
+      ? `Launch the local tool ${getSkillLabel?.(action.skillId) ?? action.skillId}`
+      : undefined) ??
     (action.type === "replace_in_file"
       ? `Apply an exact text replacement in ${action.path ?? "the selected file"}`
       : action.path) ??
@@ -35,7 +39,8 @@ export function AgentActionPlanView({
   onTrustAction,
   permissionSettings,
   getActionStatusTone,
-  getPermissionDecisionTone
+  getPermissionDecisionTone,
+  getSkillLabel
 }: AgentActionPlanViewProps) {
   return (
     <div className="chat-action-plan">
@@ -57,7 +62,7 @@ export function AgentActionPlanView({
               <div className="chat-action-main">
                 <div className="compact-copy">
                   <strong>{action.label}</strong>
-                  <span>{describeAction(action)}</span>
+                  <span>{describeAction(action, getSkillLabel)}</span>
                 </div>
 
                 {editPreview ? (
@@ -117,6 +122,8 @@ export function AgentActionPlanView({
                         ? "Apply edit"
                         : action.type === "run_command"
                           ? "Run"
+                          : action.type === "launch_skill"
+                            ? "Launch"
                           : "Start"}
                 </button>
               </div>

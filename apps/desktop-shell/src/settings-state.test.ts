@@ -35,7 +35,7 @@ describe("settings-state", () => {
           {
             provider: "gemini",
             enabled: true,
-            apiKey: "AIza-user-key-7812",
+            apiKey: "test-gemini-key",
             preferredModelId: "gemini-2.5-pro"
           }
         ]
@@ -47,8 +47,45 @@ describe("settings-state", () => {
     assert.equal(settings.activeModelId, "gemini-2.5-pro");
     assert.equal(
       getPrimaryProviderAccount(settings, "gemini")?.apiKey,
-      "AIza-user-key-7812"
+      "test-gemini-key"
     );
+  });
+
+  it("supports DeepSeek as a first-class OpenAI-compatible provider", () => {
+    const settings = normalizeWorkbenchSettings(
+      {
+        contextDirectories: [
+          "/analysis/context-a",
+          "/analysis/context-a",
+          "/analysis/context-b"
+        ],
+        providerProfiles: [
+          {
+            provider: "deepseek",
+            enabled: true,
+            preferredModelId: "deepseek-v4-pro"
+          }
+        ],
+        providerAccounts: [
+          {
+            id: "deepseek-account-1",
+            provider: "deepseek",
+            label: "DeepSeek Primary",
+            enabled: true,
+            apiKey: "test-deepseek-key",
+            baseUrl: "https://api.deepseek.com"
+          }
+        ]
+      },
+      desktopShellModels
+    );
+
+    assert.equal(getPrimaryProviderAccount(settings, "deepseek")?.baseUrl, "https://api.deepseek.com");
+    assert.ok(getAvailableModelIds(settings, desktopShellModels).includes("deepseek-v4-pro"));
+    assert.deepEqual(settings.contextDirectories, [
+      "/analysis/context-a",
+      "/analysis/context-b"
+    ]);
   });
 
   it("updates providers, multiple accounts, and active model in a controlled way", () => {
@@ -72,13 +109,13 @@ describe("settings-state", () => {
               withExtraAccount,
               primaryAnthropic!.id,
               {
-                apiKey: "sk-ant-user-9090"
+                apiKey: "test-anthropic-key"
               },
               desktopShellModels
             ),
             secondOpenRouter!.id,
             {
-              apiKey: "sk-or-user-2048",
+              apiKey: "test-openrouter-key",
               baseUrl: "https://openrouter.ai/api/v1",
               label: "OpenRouter Backup"
             },
@@ -115,7 +152,7 @@ describe("settings-state", () => {
         configured.providerProfiles.find((profile) => profile.provider === "openrouter")!,
         configured
       ),
-      "Configured · sk-o***2048"
+      "Configured · test***-key"
     );
   });
 });

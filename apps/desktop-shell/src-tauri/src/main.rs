@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use std::env;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -15,6 +16,7 @@ use tauri::{AppHandle, Emitter, State};
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 const WORKSPACE_INSTRUCTIONS_FILE: &str = "AGENTS.md";
 const WORKSPACE_INSTRUCTIONS_CHAR_LIMIT: usize = 12_000;
+const EXTERNAL_DIRECTORY_FILE_LIMIT: usize = 400;
 
 #[derive(Clone, Default)]
 struct CommandRegistry {
@@ -66,6 +68,21 @@ struct RepositorySnapshot {
 struct WorkspaceFilePayload {
     path: String,
     content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalDirectorySnapshot {
+    root_path: String,
+    files: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillProbeResult {
+    available: bool,
+    resolved_path: String,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -252,6 +269,17 @@ fn write_external_file(absolute_path: String, content: String) -> Result<Workspa
     })
 }
 
+#[tauri::command]
+fn list_external_directory(absolute_path: String) -> Result<ExternalDirectorySnapshot, String> {
+    let resolved = resolve_external_directory_path(&absolute_path)?;
+    let files = list_directory_files(&resolved, EXTERNAL_DIRECTORY_FILE_LIMIT)?;
+
+    Ok(ExternalDirectorySnapshot {
+        root_path: normalize_display_path(&resolved),
+        files,
+    })
+}
+
 fn read_workspace_instructions(root: &Path) -> Result<(String, String), String> {
     let instructions_path = root.join(WORKSPACE_INSTRUCTIONS_FILE);
     if !instructions_path.is_file() {
@@ -300,7 +328,7 @@ fn launch_skill_process(
     arguments: Vec<String>,
     working_directory: Option<String>,
 ) -> Result<bool, String> {
-    let executable = resolve_external_file_path(&executable_path)?;
+    let executable = resolve_external_executable_path(&executable_path)?;
     let mut command = Command::new(&executable);
     command.args(arguments.into_iter().filter(|entry| !entry.trim().is_empty()));
 
@@ -320,6 +348,51 @@ fn launch_skill_process(
         })?;
 
     Ok(true)
+}
+
+#[tauri::command]
+fn probe_skill_process(
+    executable_path: String,
+    working_directory: Option<String>,
+) -> SkillProbeResult {
+    let resolved_directory = match working_directory {
+        Some(directory) if !directory.trim().is_empty() => match resolve_external_directory_path(&directory) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                return SkillProbeResult {
+                    available: false,
+                    resolved_path: String::new(),
+                    message: error,
+                }
+            }
+        },
+        _ => None,
+    };
+
+    match resolve_external_executable_path(&executable_path) {
+        Ok(path) => {
+            let message = if let Some(directory) = resolved_directory {
+                format!(
+                    "Ready to launch from '{}' using '{}'.",
+                    directory.display(),
+                    path.display()
+                )
+            } else {
+                format!("Ready to launch using '{}'.", path.display())
+            };
+
+            SkillProbeResult {
+                available: true,
+                resolved_path: normalize_display_path(&path),
+                message,
+            }
+        }
+        Err(error) => SkillProbeResult {
+            available: false,
+            resolved_path: String::new(),
+            message: error,
+        },
+    }
 }
 
 #[tauri::command]
@@ -470,13 +543,26 @@ fn workspace_root() -> Result<PathBuf, String> {
 }
 
 fn list_workspace_files(root: &Path) -> Result<Vec<String>, String> {
+    list_directory_files(root, usize::MAX)
+}
+
+fn list_directory_files(root: &Path, limit: usize) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
-    collect_workspace_files(root, root, &mut files)?;
+    collect_workspace_files(root, root, &mut files, limit)?;
     files.sort_by_cached_key(|entry| entry.to_lowercase());
     Ok(files)
 }
 
-fn collect_workspace_files(current: &Path, root: &Path, files: &mut Vec<String>) -> Result<(), String> {
+fn collect_workspace_files(
+    current: &Path,
+    root: &Path,
+    files: &mut Vec<String>,
+    limit: usize,
+) -> Result<(), String> {
+    if files.len() >= limit {
+        return Ok(());
+    }
+
     let entries = fs::read_dir(current).map_err(|error| {
         format!(
             "Failed to read workspace directory '{}': {}",
@@ -500,7 +586,7 @@ fn collect_workspace_files(current: &Path, root: &Path, files: &mut Vec<String>)
                 continue;
             }
 
-            collect_workspace_files(&path, root, files)?;
+            collect_workspace_files(&path, root, files, limit)?;
             continue;
         }
 
@@ -509,6 +595,10 @@ fn collect_workspace_files(current: &Path, root: &Path, files: &mut Vec<String>)
                 .strip_prefix(root)
                 .map_err(|error| format!("Failed to derive relative file path: {}", error))?;
             files.push(relative_path.to_string_lossy().replace('\\', "/"));
+
+            if files.len() >= limit {
+                break;
+            }
         }
     }
 
@@ -602,6 +692,72 @@ fn resolve_external_file_path(absolute_path: &str) -> Result<PathBuf, String> {
     }
 
     Ok(canonical)
+}
+
+fn resolve_external_executable_path(input: &str) -> Result<PathBuf, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Executable path cannot be empty.".into());
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return resolve_external_file_path(trimmed);
+    }
+
+    if path.components().count() > 1 {
+        return Err("Executable launchers must be absolute paths or bare command names.".into());
+    }
+
+    resolve_executable_on_path(trimmed).ok_or_else(|| {
+        format!(
+            "Could not resolve '{}' from PATH. Provide an absolute path or install the launcher on PATH.",
+            trimmed
+        )
+    })
+}
+
+fn resolve_executable_on_path(command_name: &str) -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    let search_paths = env::split_paths(&path_var);
+
+    #[cfg(target_os = "windows")]
+    let extensions = {
+        let path = Path::new(command_name);
+        if path.extension().is_some() {
+            vec!["".to_string()]
+        } else {
+            let raw_extensions = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+            let mut values = vec!["".to_string()];
+            values.extend(
+                raw_extensions
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| entry.to_string()),
+            );
+            values
+        }
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let extensions = vec!["".to_string()];
+
+    for directory in search_paths {
+        for extension in &extensions {
+            let candidate = if extension.is_empty() {
+                directory.join(command_name)
+            } else {
+                directory.join(format!("{}{}", command_name, extension))
+            };
+
+            if candidate.is_file() {
+                return Some(candidate.canonicalize().unwrap_or(candidate));
+            }
+        }
+    }
+
+    None
 }
 
 fn resolve_external_directory_path(absolute_path: &str) -> Result<PathBuf, String> {
@@ -724,6 +880,22 @@ fn validate_allowed_command(command: &str) -> Result<(), String> {
             | "pwd"
             | "ls"
             | "dir"
+            | "rg"
+            | "where"
+            | "dumpbin"
+            | "objdump"
+            | "llvm-objdump"
+            | "llvm-readobj"
+            | "readelf"
+            | "nm"
+            | "strings"
+            | "file"
+            | "xxd"
+            | "certutil"
+            | "get-command"
+            | "get-childitem"
+            | "get-content"
+            | "select-string"
             | "echo"
     );
 
@@ -933,12 +1105,14 @@ fn main() {
             repository_snapshot,
             read_workspace_file,
             read_external_file,
+            list_external_directory,
             write_workspace_file,
             write_external_file,
             run_workspace_command,
             start_workspace_command,
             cancel_workspace_command,
-            launch_skill_process
+            launch_skill_process,
+            probe_skill_process
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OpenGravity desktop shell");
@@ -947,8 +1121,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        next_run_id, pick_initial_file, resolve_external_file_path, sanitize_relative_path,
-        split_non_empty_lines, validate_allowed_command,
+        next_run_id, pick_initial_file, probe_skill_process, resolve_external_executable_path,
+        resolve_external_file_path, sanitize_relative_path, split_non_empty_lines,
+        validate_allowed_command,
     };
     use std::path::PathBuf;
 
@@ -983,9 +1158,35 @@ mod tests {
     }
 
     #[test]
+    fn resolves_path_launchers_or_rejects_relative_executables() {
+        assert!(resolve_external_executable_path("tools/x64dbg.exe").is_err());
+
+        #[cfg(target_os = "windows")]
+        assert!(
+            resolve_external_executable_path("powershell").is_ok()
+                || resolve_external_executable_path("pwsh").is_ok()
+        );
+    }
+
+    #[test]
+    fn probes_skill_launchers_without_machine_specific_paths() {
+        let missing = probe_skill_process("missing-launcher".into(), None);
+        assert!(!missing.available);
+
+        #[cfg(target_os = "windows")]
+        {
+            let available = probe_skill_process("powershell".into(), None);
+            assert!(available.available);
+            assert!(!available.resolved_path.is_empty());
+        }
+    }
+
+    #[test]
     fn validates_safe_commands() {
         assert!(validate_allowed_command("npm run test").is_ok());
         assert!(validate_allowed_command("git status --short").is_ok());
+        assert!(validate_allowed_command("rg TODO src").is_ok());
+        assert!(validate_allowed_command("dumpbin /headers build/app.exe").is_ok());
         assert!(validate_allowed_command("echo hello").is_ok());
         assert!(validate_allowed_command("git reset --hard").is_err());
         assert!(validate_allowed_command("npm run test && git status").is_err());

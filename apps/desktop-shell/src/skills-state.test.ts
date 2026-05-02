@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import {
   addLocalSkill,
+  createLocalSkillFromTemplate,
+  getStarterSkillTemplates,
   normalizeLocalSkills,
   parseSkillArguments,
   removeLocalSkill,
@@ -16,8 +18,8 @@ describe("skills-state", () => {
     const skill = created[0];
     const updated = updateLocalSkill(created, skill.id, {
       label: "Ghidra",
-      executablePath: "C:/Tools/Ghidra/ghidraRun.bat",
-      workingDirectory: "C:/Tools/Ghidra",
+      executablePath: "/opt/tooling/ghidra/launcher",
+      workingDirectory: "/opt/tooling/ghidra",
       argumentsText: "project.gpr\nscript.py"
     });
 
@@ -32,7 +34,7 @@ describe("skills-state", () => {
         id: "skill-9",
         label: "x64dbg",
         enabled: false,
-        executablePath: "C:/Tools/x64dbg/x64dbg.exe"
+        executablePath: "/opt/tooling/x64dbg/launcher"
       }
     ]);
 
@@ -41,5 +43,17 @@ describe("skills-state", () => {
       serializeLocalSkills(normalized),
       JSON.stringify(normalized)
     );
+  });
+
+  it("provides generic starter templates without machine-specific paths", () => {
+    const templates = getStarterSkillTemplates();
+    const ghidraTemplate = templates.find((template) => template.id === "ghidra");
+    const created = ghidraTemplate ? createLocalSkillFromTemplate(ghidraTemplate) : null;
+
+    assert.ok(ghidraTemplate);
+    assert.equal(ghidraTemplate?.executablePath, "ghidraRun.bat");
+    assert.ok(created);
+    assert.equal(created?.label, "Ghidra");
+    assert.equal(created?.workingDirectory, "");
   });
 });

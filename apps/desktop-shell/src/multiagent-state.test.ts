@@ -30,7 +30,7 @@ describe("multiagent-state", () => {
       settings,
       settings.providerAccounts.find((account) => account.provider === "gemini")!.id,
       {
-        apiKey: "AIza-test-1234"
+        apiKey: "test-gemini-account-a"
       },
       desktopShellModels
     );
@@ -58,7 +58,7 @@ describe("multiagent-state", () => {
         (account) => account.provider === "gemini" && account.label.includes("2")
       )!.id,
       {
-        apiKey: "AIza-test-5678",
+        apiKey: "test-gemini-account-b",
         label: "Gemini Backup"
       },
       desktopShellModels
@@ -96,7 +96,7 @@ describe("multiagent-state", () => {
       messages,
       {
         account: {
-          apiKey: "AIza-test-1234",
+          apiKey: "test-gemini-account-a",
           baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
           enabled: true,
           id: "gemini-account-1",

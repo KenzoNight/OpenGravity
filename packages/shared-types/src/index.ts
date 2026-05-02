@@ -10,6 +10,7 @@ export type AgentRole =
 
 export type ModelProvider =
   | "anthropic"
+  | "deepseek"
   | "gemini"
   | "groq"
   | "openai"

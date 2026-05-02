@@ -20,8 +20,10 @@ import {
   browserFallbackWorkspace,
   cancelWorkspaceCommand,
   launchSkillProcess,
+  listExternalDirectory,
   loadRepositorySnapshot,
   loadWorkspaceSnapshot,
+  probeSkillProcess,
   readExternalFile,
   listenToWorkspaceCommands,
   readWorkspaceFile,
@@ -29,6 +31,8 @@ import {
   startWorkspaceCommand,
   writeExternalFile,
   writeWorkspaceFile,
+  type ExternalDirectorySnapshotPayload,
+  type SkillProbePayload,
   type WorkspaceSnapshotPayload
 } from "./native-bridge";
 import {
@@ -124,6 +128,8 @@ import {
 } from "./multiagent-state";
 import {
   addLocalSkill,
+  createLocalSkillFromTemplate,
+  getStarterSkillTemplates,
   normalizeLocalSkills,
   parseSkillArguments,
   removeLocalSkill,
@@ -338,14 +344,70 @@ function normalizePathSlashes(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
+function buildContextFilePath(rootPath: string, relativePath: string): string {
+  return `${normalizePathSlashes(rootPath).replace(/\/+$/, "")}/${relativePath.replace(/^\/+/, "")}`;
+}
+
 function isCompatibleChatProvider(provider: ModelProvider): boolean {
   return (
+    provider === "deepseek" ||
     provider === "gemini" ||
     provider === "groq" ||
     provider === "openrouter" ||
     provider === "openai" ||
     provider === "custom"
   );
+}
+
+function buildLocalToolingContext(
+  skills: LocalSkill[],
+  skillProbeMap: Record<string, SkillProbePayload>
+): string {
+  const enabledSkills = skills.filter((skill) => skill.enabled && skill.executablePath.trim());
+  const availableSkills = enabledSkills.filter((skill) => skillProbeMap[skill.id]?.available);
+
+  if (availableSkills.length === 0) {
+    return "Local tools: no registered external skills are available right now.";
+  }
+
+  const entries = availableSkills
+    .slice(0, 8)
+    .map((skill) => {
+      const parts = [`id=${skill.id}`, `label=${skill.label}`];
+      if (skill.description.trim()) {
+        parts.push(`description=${skill.description.trim()}`);
+      }
+      const probe = skillProbeMap[skill.id];
+      if (probe?.resolvedPath.trim()) {
+        parts.push(`launcher=${probe.resolvedPath.trim()}`);
+      } else if (skill.executablePath.trim()) {
+        parts.push(`launcher=${skill.executablePath.trim()}`);
+      }
+      return `- ${parts.join(" | ")}`;
+    })
+    .join("\n");
+
+  return `Local tools that can be launched with launch_skill:\n${entries}`;
+}
+
+function buildContextDirectoryPrompt(
+  contextDirectories: string[],
+  contextSnapshots: Record<string, ExternalDirectorySnapshotPayload>
+): string {
+  if (contextDirectories.length === 0) {
+    return "Extra context directories: none configured.";
+  }
+
+  const entries = contextDirectories.map((directory) => {
+    const snapshot = contextSnapshots[directory];
+    if (!snapshot) {
+      return `- ${directory} | pending scan`;
+    }
+
+    return `- ${snapshot.rootPath} | ${snapshot.files.length} indexed files`;
+  });
+
+  return `Extra context directories:\n${entries.join("\n")}`;
 }
 
 async function loadShellHealth(): Promise<ShellHealth> {
@@ -493,6 +555,10 @@ export default function App() {
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [selectedSkillId, setSelectedSkillId] = useState<string>("");
   const [skills, setSkills] = useState<LocalSkill[]>(() => loadLocalSkills());
+  const [skillProbeMap, setSkillProbeMap] = useState<Record<string, SkillProbePayload>>({});
+  const [externalContextSnapshots, setExternalContextSnapshots] = useState<
+    Record<string, ExternalDirectorySnapshotPayload>
+  >({});
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
@@ -604,6 +670,90 @@ export default function App() {
 
     window.localStorage.setItem(skillsStorageKey, serializeLocalSkills(skills));
   }, [skills]);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const configuredSkills = skills.filter((skill) => skill.enabled && skill.executablePath.trim());
+    if (configuredSkills.length === 0) {
+      setSkillProbeMap({});
+      return () => {
+        disposed = true;
+      };
+    }
+
+    void Promise.all(
+      configuredSkills.map(async (skill) => {
+        try {
+          const probe = await probeSkillProcess({
+            executablePath: skill.executablePath,
+            workingDirectory: skill.workingDirectory || undefined
+          });
+          return [skill.id, probe] as const;
+        } catch (error) {
+          return [
+            skill.id,
+            {
+              available: false,
+              resolvedPath: "",
+              message: error instanceof Error ? error.message : `Failed to probe ${skill.label}.`
+            }
+          ] as const;
+        }
+      })
+    ).then((entries) => {
+      if (disposed) {
+        return;
+      }
+
+      startTransition(() => {
+        setSkillProbeMap(Object.fromEntries(entries));
+      });
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, [skills]);
+
+  useEffect(() => {
+    let disposed = false;
+    const contextDirectories = settings.contextDirectories.map((entry) => entry.trim()).filter(Boolean).slice(0, 5);
+
+    if (contextDirectories.length === 0) {
+      setExternalContextSnapshots({});
+      return () => {
+        disposed = true;
+      };
+    }
+
+    void Promise.all(
+      contextDirectories.map(async (directory) => {
+        try {
+          const snapshot = await listExternalDirectory(directory);
+          return [directory, snapshot] as const;
+        } catch {
+          return [directory, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (disposed) {
+        return;
+      }
+
+      startTransition(() => {
+        setExternalContextSnapshots(
+          Object.fromEntries(
+            entries.filter((entry): entry is readonly [string, ExternalDirectorySnapshotPayload] => Boolean(entry[1]))
+          )
+        );
+      });
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, [settings.contextDirectories]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.localStorage) {
@@ -770,9 +920,27 @@ export default function App() {
     [modelCatalog, shellHealth, settings]
   );
   const workflowTemplate = useMemo(() => createWorkflowRun(snapshot.executionPlan), [snapshot.executionPlan]);
+  const configuredContextDirectories = useMemo(
+    () => settings.contextDirectories.map((entry) => entry.trim()).filter(Boolean).slice(0, 5),
+    [settings.contextDirectories]
+  );
   const filteredWorkspaceFiles = useMemo(
     () => filterWorkspaceFiles(workspace.files, explorerQuery),
     [explorerQuery, workspace.files]
+  );
+  const filteredContextDirectories = useMemo(
+    () =>
+      configuredContextDirectories
+        .map((directory) => {
+          const snapshot = externalContextSnapshots[directory];
+          return {
+            directory,
+            rootPath: snapshot?.rootPath ?? directory,
+            files: filterWorkspaceFiles(snapshot?.files ?? [], explorerQuery)
+          };
+        })
+        .filter((entry) => entry.files.length > 0 || !explorerQuery.trim()),
+    [configuredContextDirectories, explorerQuery, externalContextSnapshots]
   );
   const explorerGroups = useMemo(() => buildExplorerGroups(filteredWorkspaceFiles), [filteredWorkspaceFiles]);
   const commandPresets = useMemo(() => buildWorkspaceCommandPresets(workspace.files), [workspace.files]);
@@ -809,6 +977,27 @@ export default function App() {
     selectedPrimaryAccount ??
     selectedProviderAccounts[0];
   const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
+  const selectedSkillProbe = selectedSkill ? skillProbeMap[selectedSkill.id] : undefined;
+  const starterSkillTemplates = useMemo(() => getStarterSkillTemplates(), []);
+  const localToolingContext = useMemo(
+    () => buildLocalToolingContext(skills, skillProbeMap),
+    [skillProbeMap, skills]
+  );
+  const contextDirectoryPrompt = useMemo(
+    () => buildContextDirectoryPrompt(configuredContextDirectories, externalContextSnapshots),
+    [configuredContextDirectories, externalContextSnapshots]
+  );
+  const environmentContext = useMemo(
+    () => [localToolingContext, contextDirectoryPrompt].filter(Boolean).join("\n\n"),
+    [contextDirectoryPrompt, localToolingContext]
+  );
+  const skillLabelById = useMemo(
+    () =>
+      new Map(
+        skills.map((skill) => [skill.id, skill.label] as const)
+      ),
+    [skills]
+  );
   const selectedProviderCatalogBusy = providerCatalogBusy === selectedProfile?.provider;
   const selectedProviderSupportsCatalog = selectedProfile?.provider === "openrouter";
   const openRouterFreeModels = useMemo(
@@ -853,6 +1042,7 @@ export default function App() {
   const showQuickBaseUrl = Boolean(
     quickSetupProfile &&
       (quickSetupProfile.provider === "custom" ||
+        quickSetupProfile.provider === "deepseek" ||
         quickSetupProfile.provider === "openrouter" ||
         quickSetupProfile.provider === "ollama")
   );
@@ -1142,6 +1332,44 @@ export default function App() {
                     </div>
                   </div>
                 ))}
+              </section>
+
+              <section className="section-block">
+                <div className="section-label">Context directories</div>
+                {settings.contextDirectories.length === 0 ? (
+                  <div className="settings-empty-state">
+                    Add external context directories in Settings to surface extra files for the agent.
+                  </div>
+                ) : (
+                  filteredContextDirectories.map((entry) => (
+                    <div className="tree-group" key={entry.directory}>
+                      <div className="tree-item is-folder">
+                        <span>{entry.rootPath}</span>
+                      </div>
+                      <div className="tree-children">
+                        {entry.files.length === 0 ? (
+                          <div className="tree-item is-file">
+                            <span>No matching files</span>
+                          </div>
+                        ) : (
+                          entry.files.map((relativePath) => {
+                            const absolutePath = buildContextFilePath(entry.rootPath, relativePath);
+                            return (
+                              <button
+                                className={`tree-item is-file ${absolutePath === activeFilePath ? "is-active" : ""}`}
+                                key={absolutePath}
+                                onClick={() => void handleSelectFile(absolutePath)}
+                                type="button"
+                              >
+                                <span>{relativePath}</span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </section>
             </div>
           </>
@@ -2000,6 +2228,12 @@ export default function App() {
           setTerminalInput(action.command);
           await launchCommand(action.command);
           break;
+        case "launch_skill":
+          if (!action.skillId) {
+            throw new Error("Launch tool action is missing a skill id.");
+          }
+          await handleLaunchSkill(action.skillId);
+          break;
         case "run_workflow":
           if (action.workflow !== "recommended") {
             throw new Error("Unsupported workflow action.");
@@ -2087,20 +2321,42 @@ export default function App() {
     }
   };
 
-  const handleLaunchSkill = async () => {
-    if (!selectedSkill) {
+  const handleLaunchSkill = async (skillId = selectedSkill?.id) => {
+    if (!skillId) {
+      return;
+    }
+
+    const skill = skills.find((entry) => entry.id === skillId);
+    if (!skill) {
+      setWorkspaceNotice(`Skill ${skillId} is not available in this workspace.`);
+      return;
+    }
+
+    if (!skill.enabled) {
+      setWorkspaceNotice(`${skill.label} is disabled. Enable it before launching the tool.`);
+      return;
+    }
+
+    if (!skill.executablePath.trim()) {
+      setWorkspaceNotice(`${skill.label} does not have a launcher configured yet.`);
+      return;
+    }
+
+    const probe = skillProbeMap[skill.id];
+    if (probe && !probe.available) {
+      setWorkspaceNotice(probe.message || `${skill.label} is not ready to launch yet.`);
       return;
     }
 
     try {
       await launchSkillProcess({
-        executablePath: selectedSkill.executablePath,
-        arguments: parseSkillArguments(selectedSkill),
-        workingDirectory: selectedSkill.workingDirectory || undefined
+        executablePath: skill.executablePath,
+        arguments: parseSkillArguments(skill),
+        workingDirectory: skill.workingDirectory || undefined
       });
-      setWorkspaceNotice(`Launched ${selectedSkill.label}.`);
+      setWorkspaceNotice(`Launched ${skill.label}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to launch ${selectedSkill.label}.`;
+      const message = error instanceof Error ? error.message : `Failed to launch ${skill.label}.`;
       setWorkspaceNotice(message);
     }
   };
@@ -2153,6 +2409,7 @@ export default function App() {
         activeFilePath,
         activeDocument?.currentContent ?? "",
         workspaceInstructions,
+        environmentContext,
         chatMessages,
         prompt
       );
@@ -3374,6 +3631,7 @@ export default function App() {
                           actionStatuses={agentActionStatuses}
                           getActionStatusTone={actionStatusTone}
                           getPermissionDecisionTone={permissionDecisionTone}
+                          getSkillLabel={(skillId) => skillLabelById.get(skillId) ?? skillId}
                           onApplyAction={handleApplyAgentAction}
                           onTrustAction={handleTrustAgentAction}
                           permissionSettings={permissionSettings}
@@ -3819,6 +4077,74 @@ export default function App() {
                         />
                         <span>Allow automatic provider handoff</span>
                       </label>
+
+                      <div className="settings-field">
+                        <label className="field-label">Extra context directories</label>
+                        <div className="field-help">
+                          Add up to five external directories that should stay visible to the agent and the Explorer.
+                        </div>
+                        <div className="provider-list">
+                          {settings.contextDirectories.length === 0 ? (
+                            <div className="settings-empty-state">
+                              No extra context directories configured yet.
+                            </div>
+                          ) : (
+                            settings.contextDirectories.map((directory, index) => (
+                              <div className="provider-list-item static-card" key={`${directory}-${index}`}>
+                                <div className="provider-list-copy">
+                                  <strong>{`Context ${index + 1}`}</strong>
+                                  <span>{directory}</span>
+                                </div>
+                                <button
+                                  className="secondary-button slim-button"
+                                  onClick={() =>
+                                    setSettings((current) => ({
+                                      ...current,
+                                      contextDirectories: current.contextDirectories.filter((_, entryIndex) => entryIndex !== index)
+                                    }))
+                                  }
+                                  type="button"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                        <div className="settings-inline-actions">
+                          <button
+                            className="secondary-button slim-button"
+                            disabled={settings.contextDirectories.length >= 5}
+                            onClick={() =>
+                              setSettings((current) => ({
+                                ...current,
+                                contextDirectories: [...current.contextDirectories, ""]
+                              }))
+                            }
+                            type="button"
+                          >
+                            Add directory
+                          </button>
+                        </div>
+                        <div className="flat-list">
+                          {settings.contextDirectories.map((directory, index) => (
+                            <input
+                              className="settings-input"
+                              key={`context-input-${index}`}
+                              onChange={(event) =>
+                                setSettings((current) => ({
+                                  ...current,
+                                  contextDirectories: current.contextDirectories.map((entry, entryIndex) =>
+                                    entryIndex === index ? event.target.value : entry
+                                  )
+                                }))
+                              }
+                              placeholder="/absolute/path/to/context"
+                              value={directory}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     </section>
 
                     <section className="settings-section">
@@ -3861,6 +4187,27 @@ export default function App() {
                       </button>
                     </div>
 
+                    <div className="settings-field">
+                      <label className="field-label">Starter templates</label>
+                      <div className="settings-inline-actions">
+                        {starterSkillTemplates.map((template) => (
+                          <button
+                            className="secondary-button slim-button"
+                            key={template.id}
+                            onClick={() =>
+                              setSkills((current) => [...current, createLocalSkillFromTemplate(template)])
+                            }
+                            type="button"
+                          >
+                            Add {template.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="field-help">
+                        These templates use generic executable names so they work with PATH-based launches or custom install locations.
+                      </div>
+                    </div>
+
                     <div className="provider-list">
                       {skills.length === 0 ? (
                         <div className="settings-empty-state">
@@ -3878,8 +4225,20 @@ export default function App() {
                               <strong>{skill.label}</strong>
                               <span>{skill.executablePath || "Executable path not set"}</span>
                             </div>
-                            <span className={`state-pill ${skill.enabled ? "is-done" : "is-waiting"}`}>
-                              {skill.enabled ? "enabled" : "disabled"}
+                            <span
+                              className={`state-pill ${
+                                !skill.enabled
+                                  ? "is-waiting"
+                                  : skillProbeMap[skill.id]?.available
+                                    ? "is-done"
+                                    : "is-blocked"
+                              }`}
+                            >
+                              {!skill.enabled
+                                ? "disabled"
+                                : skillProbeMap[skill.id]?.available
+                                  ? "ready"
+                                  : "needs setup"}
                             </span>
                           </button>
                         ))
@@ -4118,6 +4477,8 @@ export default function App() {
                             placeholder={
                               selectedProfile.provider === "ollama"
                                 ? "http://127.0.0.1:11434/v1"
+                                : selectedProfile.provider === "deepseek"
+                                  ? "https://api.deepseek.com"
                                 : selectedProfile.provider === "gemini"
                                   ? "https://generativelanguage.googleapis.com/v1beta/openai"
                                 : selectedProfile.provider === "groq"
@@ -4132,6 +4493,7 @@ export default function App() {
                           />
                           <div className="field-help">
                             {selectedProfile.provider === "anthropic" ||
+                            selectedProfile.provider === "deepseek" ||
                             selectedProfile.provider === "gemini" ||
                             selectedProfile.provider === "groq" ||
                             selectedProfile.provider === "openai"
@@ -4235,6 +4597,30 @@ export default function App() {
 
                     {selectedSkill ? (
                       <>
+                        <div className="catalog-summary-row">
+                          <span
+                            className={`state-pill ${
+                              !selectedSkill.enabled
+                                ? "is-waiting"
+                                : selectedSkillProbe?.available
+                                  ? "is-done"
+                                  : "is-blocked"
+                            }`}
+                          >
+                            {!selectedSkill.enabled
+                              ? "disabled"
+                              : selectedSkillProbe?.available
+                                ? "ready"
+                                : "needs setup"}
+                          </span>
+                          <span className="signal-pill">
+                            {selectedSkillProbe?.resolvedPath || "No resolved launcher yet"}
+                          </span>
+                        </div>
+                        {selectedSkillProbe?.message ? (
+                          <div className="field-help">{selectedSkillProbe.message}</div>
+                        ) : null}
+
                         <label className="toggle-row">
                           <input
                             checked={selectedSkill.enabled}
@@ -4283,7 +4669,7 @@ export default function App() {
 
                         <div className="settings-field">
                           <label className="field-label" htmlFor={`skill-path-${selectedSkill.id}`}>
-                            Executable path
+                            Executable path or command name
                           </label>
                           <input
                             id={`skill-path-${selectedSkill.id}`}
@@ -4293,9 +4679,12 @@ export default function App() {
                                 updateLocalSkill(current, selectedSkill.id, { executablePath: event.target.value })
                               )
                             }
-                            placeholder="C:/Tools/MyTool/tool.exe"
+                            placeholder="tool-launcher or /absolute/path/to/tool.exe"
                             value={selectedSkill.executablePath}
                           />
+                          <div className="field-help">
+                            Use an absolute path or a launcher that is already available on PATH.
+                          </div>
                         </div>
 
                         <div className="settings-field">

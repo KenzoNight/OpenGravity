@@ -10,9 +10,41 @@ export interface LocalSkill {
   enabled: boolean;
 }
 
+export interface LocalSkillTemplate {
+  id: string;
+  label: string;
+  description: string;
+  executablePath: string;
+  argumentsText: string;
+}
+
 let nextSkillId = 1;
 
 const normalizeString = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+const starterSkillTemplates: LocalSkillTemplate[] = [
+  {
+    id: "ghidra",
+    label: "Ghidra",
+    description: "Reverse engineering suite for static analysis, decompilation, and scriptable program inspection.",
+    executablePath: "ghidraRun.bat",
+    argumentsText: ""
+  },
+  {
+    id: "x64dbg",
+    label: "x64dbg",
+    description: "User-mode debugger for tracing binaries, inspecting registers, and stepping through runtime behavior.",
+    executablePath: "x64dbg.exe",
+    argumentsText: ""
+  },
+  {
+    id: "windbg",
+    label: "WinDbg",
+    description: "Windows debugger for user-mode and kernel debugging, crash dump analysis, and symbol-heavy inspection.",
+    executablePath: "windbg.exe",
+    argumentsText: ""
+  }
+];
 
 export function createDefaultSkills(): LocalSkill[] {
   return [];
@@ -27,6 +59,21 @@ export function createLocalSkill(index = nextSkillId++): LocalSkill {
     workingDirectory: "",
     argumentsText: "",
     enabled: true
+  };
+}
+
+export function getStarterSkillTemplates(): LocalSkillTemplate[] {
+  return starterSkillTemplates.map((template) => ({ ...template }));
+}
+
+export function createLocalSkillFromTemplate(template: LocalSkillTemplate): LocalSkill {
+  const skill = createLocalSkill();
+  return {
+    ...skill,
+    label: template.label,
+    description: template.description,
+    executablePath: template.executablePath,
+    argumentsText: template.argumentsText
   };
 }
 

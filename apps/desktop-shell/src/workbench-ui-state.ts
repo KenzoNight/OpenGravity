@@ -34,6 +34,7 @@ const validBottomViews = new Set<WorkbenchBottomView>(["build", "tasks", "events
 const validSettingsViews = new Set<WorkbenchSettingsView>(["providers", "skills", "integrations"]);
 const validProviders = new Set<ModelProvider>([
   "anthropic",
+  "deepseek",
   "gemini",
   "groq",
   "openai",

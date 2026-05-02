@@ -158,7 +158,8 @@ export function buildChatSystemPrompt(
   snapshot: DesktopShellSnapshot,
   activeFilePath: string,
   activeFileContent: string,
-  workspaceInstructions: WorkspaceInstructionsSnapshot | null = null
+  workspaceInstructions: WorkspaceInstructionsSnapshot | null = null,
+  localToolingContext = ""
 ): string {
   const baseContext = [
     "You are OpenGravity, a desktop coding assistant inside a local development environment.",
@@ -184,6 +185,7 @@ export function buildChatSystemPrompt(
       "Do not include an opengravity-actions block.",
       "Do not act like you changed anything in the workspace.",
       workspaceInstructionSection,
+      localToolingContext,
       activeFileSnippet
     ]
       .filter(Boolean)
@@ -199,6 +201,7 @@ export function buildChatSystemPrompt(
       "Do not include an opengravity-actions block.",
       "Use numbered steps and call out risks, assumptions, and validation steps.",
       workspaceInstructionSection,
+      localToolingContext,
       activeFileSnippet
     ]
       .filter(Boolean)
@@ -211,10 +214,12 @@ export function buildChatSystemPrompt(
     "You may reason about concrete implementation details and propose code-level changes.",
     "However, you are still a chat response in this environment: do not claim to have edited files unless the UI explicitly tells you a change was applied.",
     'When you want the UI to act, append one final ```opengravity-actions code block with strict JSON only.',
-    'The JSON schema is {"summary":"...","actions":[{"type":"open_file","path":"..."},{"type":"replace_in_file","path":"...","findText":"...","replaceText":"..."},{"type":"run_command","command":"..."},{"type":"run_workflow","workflow":"recommended"}]}.',
+    'The JSON schema is {"summary":"...","actions":[{"type":"open_file","path":"..."},{"type":"replace_in_file","path":"...","findText":"...","replaceText":"..."},{"type":"run_command","command":"..."},{"type":"run_workflow","workflow":"recommended"},{"type":"launch_skill","skillId":"...","label":"..."}]}.',
     "Only use replace_in_file when you can target one exact block safely. Prefer unique findText snippets over broad rewrites.",
+    "Only use launch_skill when a relevant local tool is already registered in the workspace tool list.",
     "Only include actions that are safe and relevant. Keep the normal explanation outside the JSON block.",
     workspaceInstructionSection,
+    localToolingContext,
     activeFileSnippet
   ]
     .filter(Boolean)
@@ -227,6 +232,7 @@ export function buildProviderChatMessages(
   activeFilePath: string,
   activeFileContent: string,
   workspaceInstructions: WorkspaceInstructionsSnapshot | null,
+  localToolingContext: string,
   history: ChatMessage[],
   userInput: string
 ): ProviderChatMessage[] {
@@ -235,7 +241,8 @@ export function buildProviderChatMessages(
     snapshot,
     activeFilePath,
     activeFileContent,
-    workspaceInstructions
+    workspaceInstructions,
+    localToolingContext
   );
   const messages: ProviderChatMessage[] = [
     {

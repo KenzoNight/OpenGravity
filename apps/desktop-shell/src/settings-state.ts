@@ -1,6 +1,7 @@
 import type { ModelDescriptor, ModelProvider } from "@opengravity/shared-types";
 
 export const settingsStorageKey = "opengravity.workbench-settings.v1";
+export const maxContextDirectories = 5;
 
 export interface ProviderAccount {
   id: string;
@@ -25,6 +26,7 @@ export interface WorkbenchSettings {
   autoHandoff: boolean;
   parallelAgentMode: boolean;
   concurrentAgentCount: number;
+  contextDirectories: string[];
   providerProfiles: ProviderProfile[];
   providerAccounts: ProviderAccount[];
 }
@@ -37,6 +39,7 @@ export type ProviderConnectionState =
 
 const providerOrder: ModelProvider[] = [
   "anthropic",
+  "deepseek",
   "gemini",
   "groq",
   "openai",
@@ -47,6 +50,7 @@ const providerOrder: ModelProvider[] = [
 
 const providerLabels: Record<ModelProvider, string> = {
   anthropic: "Anthropic",
+  deepseek: "DeepSeek",
   gemini: "Gemini",
   groq: "Groq",
   openai: "OpenAI",
@@ -55,9 +59,16 @@ const providerLabels: Record<ModelProvider, string> = {
   custom: "Custom"
 };
 
-const defaultEnabledProviders = new Set<ModelProvider>(["anthropic", "gemini", "groq", "openai"]);
+const defaultEnabledProviders = new Set<ModelProvider>([
+  "anthropic",
+  "deepseek",
+  "gemini",
+  "groq",
+  "openai"
+]);
 
 const defaultBaseUrls: Partial<Record<ModelProvider, string>> = {
+  deepseek: "https://api.deepseek.com",
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
   groq: "https://api.groq.com/openai/v1",
   openai: "https://api.openai.com/v1",
@@ -67,6 +78,36 @@ const defaultBaseUrls: Partial<Record<ModelProvider, string>> = {
 };
 
 const normalizeString = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+function normalizeContextDirectories(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const directories: string[] = [];
+
+  for (const entry of input) {
+    const normalized = normalizeString(entry);
+    if (!normalized) {
+      continue;
+    }
+
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    directories.push(normalized);
+
+    if (directories.length >= maxContextDirectories) {
+      break;
+    }
+  }
+
+  return directories;
+}
 
 const hasOwn = <T extends object>(value: T | undefined, key: PropertyKey): boolean =>
   Boolean(value) && Object.prototype.hasOwnProperty.call(value, key);
@@ -215,6 +256,7 @@ export function createDefaultWorkbenchSettings(models: ModelDescriptor[]): Workb
     autoHandoff: true,
     parallelAgentMode: true,
     concurrentAgentCount: 3,
+    contextDirectories: [],
     providerProfiles,
     providerAccounts
   };
@@ -374,6 +416,7 @@ export function normalizeWorkbenchSettings(input: unknown, models: ModelDescript
       value.concurrentAgentCount <= 6
         ? Math.trunc(value.concurrentAgentCount)
         : defaults.concurrentAgentCount,
+    contextDirectories: normalizeContextDirectories(value.contextDirectories),
     providerProfiles: normalizedProfiles,
     providerAccounts
   };

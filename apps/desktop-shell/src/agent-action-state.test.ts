@@ -11,15 +11,17 @@ describe("agent-action-state", () => {
     const parsed = extractAgentActionPlan(`Inspect the failing build first.
 
 \`\`\`opengravity-actions
-{"summary":"Use the editor and terminal next","actions":[{"type":"open_file","path":"CMakeLists.txt"},{"type":"run_command","command":"cmake --build build"},{"type":"replace_in_file","path":"src/main.rs","findText":"println!(\\\"hello\\\");","replaceText":"println!(\\\"hello world\\\");"}]}
+{"summary":"Use the editor, tools, and terminal next","actions":[{"type":"open_file","path":"CMakeLists.txt"},{"type":"launch_skill","skillId":"skill-ghidra","label":"Launch Ghidra"},{"type":"run_command","command":"cmake --build build"},{"type":"replace_in_file","path":"src/main.rs","findText":"println!(\\\"hello\\\");","replaceText":"println!(\\\"hello world\\\");"}]}
 \`\`\``);
 
     assert.match(parsed.cleanContent, /Inspect the failing build first/i);
-    assert.equal(parsed.actionPlan?.actions.length, 3);
+    assert.equal(parsed.actionPlan?.actions.length, 4);
     assert.equal(parsed.actionPlan?.actions[0]?.type, "open_file");
-    assert.equal(parsed.actionPlan?.actions[1]?.type, "run_command");
-    assert.equal(parsed.actionPlan?.actions[2]?.type, "replace_in_file");
-    assert.equal(parsed.actionPlan?.actions[2]?.replaceText, 'println!("hello world");');
+    assert.equal(parsed.actionPlan?.actions[1]?.type, "launch_skill");
+    assert.equal(parsed.actionPlan?.actions[1]?.skillId, "skill-ghidra");
+    assert.equal(parsed.actionPlan?.actions[2]?.type, "run_command");
+    assert.equal(parsed.actionPlan?.actions[3]?.type, "replace_in_file");
+    assert.equal(parsed.actionPlan?.actions[3]?.replaceText, 'println!("hello world");');
   });
 
   it("rejects invalid or incomplete action payloads", () => {

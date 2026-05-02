@@ -12,6 +12,17 @@ export interface WorkspaceFilePayload {
   content: string;
 }
 
+export interface ExternalDirectorySnapshotPayload {
+  rootPath: string;
+  files: string[];
+}
+
+export interface SkillProbePayload {
+  available: boolean;
+  resolvedPath: string;
+  message: string;
+}
+
 export interface WorkspaceCommandResult {
   command: string;
   success: boolean;
@@ -115,6 +126,10 @@ export async function readExternalFile(absolutePath: string): Promise<WorkspaceF
   return invokeCommand<WorkspaceFilePayload>("read_external_file", { absolutePath });
 }
 
+export async function listExternalDirectory(absolutePath: string): Promise<ExternalDirectorySnapshotPayload> {
+  return invokeCommand<ExternalDirectorySnapshotPayload>("list_external_directory", { absolutePath });
+}
+
 export async function writeWorkspaceFile(relativePath: string, content: string): Promise<WorkspaceFilePayload> {
   try {
     return await invokeCommand<WorkspaceFilePayload>("write_workspace_file", { relativePath, content });
@@ -151,6 +166,13 @@ export async function launchSkillProcess(args: {
   workingDirectory?: string;
 }): Promise<boolean> {
   return invokeCommand<boolean>("launch_skill_process", args);
+}
+
+export async function probeSkillProcess(args: {
+  executablePath: string;
+  workingDirectory?: string;
+}): Promise<SkillProbePayload> {
+  return invokeCommand<SkillProbePayload>("probe_skill_process", args);
 }
 
 export async function startWorkspaceCommand(command: string): Promise<WorkspaceCommandStarted> {

@@ -140,6 +140,18 @@ describe("permission-state", () => {
     assert.equal(evaluateAgentActionPermission(commandAction, cleared), "ask");
   });
 
+  it("can remember approvals for launching a local skill", () => {
+    const skillAction = {
+      id: "skill-1",
+      label: "Launch Ghidra",
+      skillId: "skill-ghidra",
+      type: "launch_skill" as const
+    };
+
+    const remembered = rememberAgentActionApproval(createDefaultPermissionSettings(), skillAction);
+    assert.equal(evaluateAgentActionPermission(skillAction, remembered), "allow");
+  });
+
   it("supports custom allow, ask, and deny rules for commands and workflows", () => {
     let settings = createDefaultPermissionSettings();
     settings = appendPermissionRule(settings, "run_command", "python *", "deny");

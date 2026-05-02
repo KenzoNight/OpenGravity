@@ -15,9 +15,9 @@ function createConfiguredSettings() {
   const geminiAccount = getPrimaryProviderAccount(defaults, "gemini");
 
   return updateProviderAccount(
-    updateProviderAccount(defaults, anthropicAccount!.id, { apiKey: "sk-ant-user-9090" }, desktopShellModels),
+    updateProviderAccount(defaults, anthropicAccount!.id, { apiKey: "test-anthropic-key" }, desktopShellModels),
     geminiAccount!.id,
-    { apiKey: "AIza-user-key-7812" },
+    { apiKey: "test-gemini-key" },
     desktopShellModels
   );
 }
@@ -77,7 +77,7 @@ describe("buildDesktopShellSnapshot", () => {
           ),
           anthropicAccount!.id,
           {
-            apiKey: "sk-ant-user-9090"
+            apiKey: "test-anthropic-key"
           },
           desktopShellModels
         ),

@@ -28,6 +28,7 @@ Current shell prototype includes:
 - workbench-style window chrome, explorer, editor column, and agent dock
 - setup-required state when no provider is configured
 - provider settings overlay for BYOK, active model selection, fallback controls, and multi-account pools
+- DeepSeek keys through the DeepSeek OpenAI-compatible route
 - Gemini AI Studio keys through the Gemini OpenAI-compatible route
 - Groq keys through the Groq OpenAI-compatible route
 - desktop-safe local persistence for prototype settings
@@ -44,6 +45,8 @@ Current shell prototype includes:
 - parallel agent chat lanes across multiple ready accounts and providers
 - structured action blocks from agent responses can now open files, run commands, start the recommended workflow, or apply reviewed exact-match file edits with previews
 - Codex-style workspace instructions from `AGENTS.md` are loaded into the shell and included in chat context
-- OpenAI-compatible chat routing for Gemini, Groq, OpenRouter, OpenAI, and custom endpoints
+- OpenAI-compatible chat routing for DeepSeek, Gemini, Groq, OpenRouter, OpenAI, and custom endpoints
 - workbench menu actions plus a customize-layout dialog
 - user-defined local skills for launching external tools
+- skill launcher readiness probes for PATH or absolute-path tools
+- extra context directories that can be indexed outside the repo root

@@ -29,6 +29,7 @@ interface CompatibleChatResponse {
 }
 
 const defaultBaseUrls: Partial<Record<ModelProvider, string>> = {
+  deepseek: "https://api.deepseek.com",
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
   groq: "https://api.groq.com/openai/v1",
   openai: "https://api.openai.com/v1",
@@ -62,6 +63,7 @@ function resolveBaseUrl(provider: ModelProvider, account: ProviderAccount): stri
 
 function ensureCompatibleProvider(provider: ModelProvider): void {
   if (
+    provider === "deepseek" ||
     provider === "gemini" ||
     provider === "groq" ||
     provider === "openrouter" ||
@@ -72,7 +74,7 @@ function ensureCompatibleProvider(provider: ModelProvider): void {
   }
 
   throw new Error(
-    `${provider} chat routing is not wired into the desktop shell yet. Use Gemini, Groq, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint for now.`
+    `${provider} chat routing is not wired into the desktop shell yet. Use DeepSeek, Gemini, Groq, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint for now.`
   );
 }
 

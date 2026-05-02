@@ -1,4 +1,9 @@
-export type AgentActionType = "open_file" | "run_command" | "run_workflow" | "replace_in_file";
+export type AgentActionType =
+  | "open_file"
+  | "run_command"
+  | "run_workflow"
+  | "replace_in_file"
+  | "launch_skill";
 export type AgentActionStatus = "idle" | "running" | "completed" | "failed" | "blocked";
 
 export interface AgentSuggestedAction {
@@ -11,6 +16,7 @@ export interface AgentSuggestedAction {
   workflow?: "recommended";
   findText?: string;
   replaceText?: string;
+  skillId?: string;
 }
 
 export interface AgentActionPlan {
@@ -40,7 +46,11 @@ function normalizeVerbatimString(value: unknown): string | undefined {
 }
 
 function normalizeActionType(value: unknown): AgentActionType | null {
-  return value === "open_file" || value === "run_command" || value === "run_workflow" || value === "replace_in_file"
+  return value === "open_file" ||
+    value === "run_command" ||
+    value === "run_workflow" ||
+    value === "replace_in_file" ||
+    value === "launch_skill"
     ? value
     : null;
 }
@@ -55,6 +65,8 @@ function createDefaultActionLabel(type: AgentActionType, pathOrCommand: string):
       return "Run recommended workflow";
     case "replace_in_file":
       return pathOrCommand ? `Edit ${pathOrCommand}` : "Apply file edit";
+    case "launch_skill":
+      return pathOrCommand ? `Launch ${pathOrCommand}` : "Launch tool";
   }
 }
 
@@ -74,6 +86,7 @@ function normalizeAction(input: unknown, index: number): AgentSuggestedAction | 
   const workflow = value.workflow === "recommended" ? "recommended" : undefined;
   const findText = normalizeVerbatimString(value.findText);
   const replaceText = normalizeVerbatimString(value.replaceText);
+  const skillId = normalizeString(value.skillId);
 
   if (type === "open_file" && !path) {
     return null;
@@ -91,6 +104,10 @@ function normalizeAction(input: unknown, index: number): AgentSuggestedAction | 
     return null;
   }
 
+  if (type === "launch_skill" && !skillId) {
+    return null;
+  }
+
   const labelSeed =
     type === "open_file"
       ? path
@@ -98,6 +115,8 @@ function normalizeAction(input: unknown, index: number): AgentSuggestedAction | 
         ? command
         : type === "replace_in_file"
           ? path
+          : type === "launch_skill"
+            ? skillId
           : "recommended workflow";
 
   return {
@@ -109,7 +128,8 @@ function normalizeAction(input: unknown, index: number): AgentSuggestedAction | 
     path: path || undefined,
     workflow,
     findText: type === "replace_in_file" ? findText : undefined,
-    replaceText: type === "replace_in_file" ? (replaceText ?? "") : undefined
+    replaceText: type === "replace_in_file" ? (replaceText ?? "") : undefined,
+    skillId: type === "launch_skill" ? skillId : undefined
   };
 }
 

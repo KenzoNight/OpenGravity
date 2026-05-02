@@ -110,6 +110,24 @@ export const desktopShellModels: ModelDescriptor[] = [
     maxContextWindow: 200000
   },
   {
+    id: "deepseek-v4-flash",
+    label: "DeepSeek V4 Flash",
+    provider: "deepseek",
+    qualityTier: "balanced",
+    costTier: "low",
+    supportsTools: true,
+    maxContextWindow: 1_000_000
+  },
+  {
+    id: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
+    provider: "deepseek",
+    qualityTier: "strong",
+    costTier: "medium",
+    supportsTools: true,
+    maxContextWindow: 1_000_000
+  },
+  {
     id: "gemini-2.5-flash",
     label: "Gemini 2.5 Flash",
     provider: "gemini",
@@ -189,6 +207,12 @@ const baseProviderHealth: ProviderHealth[] = [
     state: "rate_limited",
     scoreModifier: -95,
     reason: "Claude budget exhausted during compile verification."
+  },
+  {
+    provider: "deepseek",
+    state: "healthy",
+    scoreModifier: 14,
+    reason: "OpenAI-compatible DeepSeek routing is available for long-context code and reasoning workloads."
   },
   {
     provider: "gemini",

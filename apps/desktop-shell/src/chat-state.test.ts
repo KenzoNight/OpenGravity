@@ -21,7 +21,7 @@ describe("chat-state", () => {
     const askPrompt = buildChatSystemPrompt("ask", snapshot, "README.md", "hello", {
       path: "AGENTS.md",
       content: "Always inspect build scripts before proposing fixes."
-    });
+    }, "Local tools: no registered external skills are available right now.");
     const planningPrompt = buildChatSystemPrompt("planning", snapshot, "README.md", "hello");
 
     assert.match(askPrompt, /Do not propose code edits/i);
@@ -80,12 +80,14 @@ describe("chat-state", () => {
     const agentPrompt = buildChatSystemPrompt("agent", snapshot, "README.md", "hello", {
       path: "AGENTS.md",
       content: "Prefer scoped edits and keep tests updated."
-    });
+    }, "Local tools that can be launched with launch_skill:\n- id=skill-ghidra | label=Ghidra");
 
     assert.match(agentPrompt, /```opengravity-actions/i);
     assert.match(agentPrompt, /replace_in_file/i);
     assert.match(agentPrompt, /run_command/i);
     assert.match(agentPrompt, /run_workflow/i);
+    assert.match(agentPrompt, /launch_skill/i);
+    assert.match(agentPrompt, /skill-ghidra/i);
     assert.match(agentPrompt, /Prefer scoped edits and keep tests updated/i);
   });
 });
