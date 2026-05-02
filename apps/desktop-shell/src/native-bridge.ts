@@ -3,6 +3,8 @@ export interface WorkspaceSnapshotPayload {
   files: string[];
   activeFilePath: string;
   activeFileContent: string;
+  instructionsFilePath: string;
+  instructionsContent: string;
 }
 
 export interface WorkspaceFilePayload {
@@ -55,13 +57,16 @@ const browserFallbackContent = `export default function App() {
 export const browserFallbackWorkspace: WorkspaceSnapshotPayload = {
   rootPath: "browser-preview",
   files: [
+    "AGENTS.md",
     "README.md",
     "package.json",
     "apps/desktop-shell/src/App.tsx",
     "apps/desktop-shell/src/settings-state.ts"
   ],
   activeFilePath: browserFallbackFile,
-  activeFileContent: browserFallbackContent
+  activeFileContent: browserFallbackContent,
+  instructionsFilePath: "AGENTS.md",
+  instructionsContent: "Use Ask mode for questions, Planning mode for plans, and Agent mode for controlled edits."
 };
 
 export const browserFallbackRepositorySnapshot: RepositorySnapshotPayload = {

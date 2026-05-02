@@ -1,5 +1,7 @@
 import type { DesktopShellSnapshot } from "./shell-state";
 import { normalizeAgentActionPlan, type AgentActionPlan } from "./agent-action-state";
+import type { WorkspaceInstructionsSnapshot } from "./workspace-instructions-state";
+import { buildWorkspaceInstructionsPrompt } from "./workspace-instructions-state";
 
 export type ChatMode = "ask" | "planning" | "agent";
 export type ChatMessageRole = "user" | "assistant" | "system";
@@ -155,7 +157,8 @@ export function buildChatSystemPrompt(
   mode: ChatMode,
   snapshot: DesktopShellSnapshot,
   activeFilePath: string,
-  activeFileContent: string
+  activeFileContent: string,
+  workspaceInstructions: WorkspaceInstructionsSnapshot | null = null
 ): string {
   const baseContext = [
     "You are OpenGravity, a desktop coding assistant inside a local development environment.",
@@ -170,6 +173,7 @@ export function buildChatSystemPrompt(
   const activeFileSnippet = activeFileContent.trim()
     ? `Active file contents:\n${activeFileContent.slice(0, 12000)}`
     : "Active file contents: empty file";
+  const workspaceInstructionSection = buildWorkspaceInstructionsPrompt(workspaceInstructions);
 
   if (mode === "ask") {
     return [
@@ -179,8 +183,11 @@ export function buildChatSystemPrompt(
       "Do not propose code edits, do not output patches, do not suggest writing files, and do not suggest running commands unless the user explicitly asks for commands.",
       "Do not include an opengravity-actions block.",
       "Do not act like you changed anything in the workspace.",
+      workspaceInstructionSection,
       activeFileSnippet
-    ].join("\n\n");
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 
   if (mode === "planning") {
@@ -191,8 +198,11 @@ export function buildChatSystemPrompt(
       "Do not write code, do not output patches, do not generate file contents, do not generate shell commands, and do not claim that any change was made.",
       "Do not include an opengravity-actions block.",
       "Use numbered steps and call out risks, assumptions, and validation steps.",
+      workspaceInstructionSection,
       activeFileSnippet
-    ].join("\n\n");
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 
   return [
@@ -204,8 +214,11 @@ export function buildChatSystemPrompt(
     'The JSON schema is {"summary":"...","actions":[{"type":"open_file","path":"..."},{"type":"replace_in_file","path":"...","findText":"...","replaceText":"..."},{"type":"run_command","command":"..."},{"type":"run_workflow","workflow":"recommended"}]}.',
     "Only use replace_in_file when you can target one exact block safely. Prefer unique findText snippets over broad rewrites.",
     "Only include actions that are safe and relevant. Keep the normal explanation outside the JSON block.",
+    workspaceInstructionSection,
     activeFileSnippet
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export function buildProviderChatMessages(
@@ -213,10 +226,17 @@ export function buildProviderChatMessages(
   snapshot: DesktopShellSnapshot,
   activeFilePath: string,
   activeFileContent: string,
+  workspaceInstructions: WorkspaceInstructionsSnapshot | null,
   history: ChatMessage[],
   userInput: string
 ): ProviderChatMessage[] {
-  const systemPrompt = buildChatSystemPrompt(mode, snapshot, activeFilePath, activeFileContent);
+  const systemPrompt = buildChatSystemPrompt(
+    mode,
+    snapshot,
+    activeFilePath,
+    activeFileContent,
+    workspaceInstructions
+  );
   const messages: ProviderChatMessage[] = [
     {
       role: "system",

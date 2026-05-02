@@ -13,5 +13,6 @@ import "./provider-catalog.test.js";
 import "./skills-state.test.js";
 import "./terminal-state.test.js";
 import "./workbench-ui-state.test.js";
+import "./workspace-instructions-state.test.js";
 import "./workspace-state.test.js";
 import "./workflow-state.test.js";

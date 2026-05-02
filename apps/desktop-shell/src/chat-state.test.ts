@@ -18,11 +18,15 @@ import { createDefaultWorkbenchSettings } from "./settings-state.js";
 describe("chat-state", () => {
   it("locks down ask and planning modes", () => {
     const snapshot = buildDesktopShellSnapshot(browserFallbackHealth, createDefaultWorkbenchSettings(desktopShellModels));
-    const askPrompt = buildChatSystemPrompt("ask", snapshot, "README.md", "hello");
+    const askPrompt = buildChatSystemPrompt("ask", snapshot, "README.md", "hello", {
+      path: "AGENTS.md",
+      content: "Always inspect build scripts before proposing fixes."
+    });
     const planningPrompt = buildChatSystemPrompt("planning", snapshot, "README.md", "hello");
 
     assert.match(askPrompt, /Do not propose code edits/i);
     assert.match(askPrompt, /Do not include an opengravity-actions block/i);
+    assert.match(askPrompt, /Workspace instructions from AGENTS\.md/i);
     assert.match(planningPrompt, /Do not generate shell commands/i);
     assert.equal(canRunAgentWorkflow("ask"), false);
     assert.equal(canRunAgentWorkflow("planning"), false);
@@ -73,11 +77,15 @@ describe("chat-state", () => {
 
   it("teaches agent mode how to emit structured ui actions", () => {
     const snapshot = buildDesktopShellSnapshot(browserFallbackHealth, createDefaultWorkbenchSettings(desktopShellModels));
-    const agentPrompt = buildChatSystemPrompt("agent", snapshot, "README.md", "hello");
+    const agentPrompt = buildChatSystemPrompt("agent", snapshot, "README.md", "hello", {
+      path: "AGENTS.md",
+      content: "Prefer scoped edits and keep tests updated."
+    });
 
     assert.match(agentPrompt, /```opengravity-actions/i);
     assert.match(agentPrompt, /replace_in_file/i);
     assert.match(agentPrompt, /run_command/i);
     assert.match(agentPrompt, /run_workflow/i);
+    assert.match(agentPrompt, /Prefer scoped edits and keep tests updated/i);
   });
 });

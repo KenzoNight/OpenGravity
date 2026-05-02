@@ -184,6 +184,10 @@ import {
   markWorkflowItemRunning,
   type WorkflowRun
 } from "./workflow-state";
+import {
+  getWorkspaceInstructionsStatus,
+  normalizeWorkspaceInstructions
+} from "./workspace-instructions-state";
 import "./styles.css";
 
 loader.config({ monaco });
@@ -542,7 +546,11 @@ export default function App() {
         setOpenDocuments([
           createWorkspaceDocument(nextWorkspace.activeFilePath, nextWorkspace.activeFileContent)
         ]);
-        setWorkspaceNotice(`Loaded ${nextWorkspace.files.length} workspace files.`);
+        setWorkspaceNotice(
+          nextWorkspace.instructionsFilePath
+            ? `Loaded ${nextWorkspace.files.length} workspace files. ${nextWorkspace.instructionsFilePath} is active.`
+            : `Loaded ${nextWorkspace.files.length} workspace files.`
+        );
       });
     });
 
@@ -848,6 +856,10 @@ export default function App() {
         quickSetupProfile.provider === "openrouter" ||
         quickSetupProfile.provider === "ollama")
   );
+  const workspaceInstructions = useMemo(
+    () => normalizeWorkspaceInstructions(workspace.instructionsFilePath, workspace.instructionsContent),
+    [workspace.instructionsContent, workspace.instructionsFilePath]
+  );
   const activeDocument = getWorkspaceDocument(openDocuments, activeFilePath);
   const activeDocumentLanguage = detectEditorLanguage(activeFilePath);
   const activeDocumentLanguageLabel = formatEditorLanguageLabel(activeDocumentLanguage);
@@ -871,6 +883,7 @@ export default function App() {
       : "No GitHub remote";
   const highlightedPulls = githubSignals?.pulls.slice(0, 2) ?? [];
   const highlightedIssues = githubSignals?.issues.slice(0, 3) ?? [];
+  const workspaceInstructionsStatus = getWorkspaceInstructionsStatus(workspaceInstructions);
   const normalizedSettings = useMemo(
     () => normalizeWorkbenchSettings(settings, modelCatalog),
     [modelCatalog, settings]
@@ -2139,6 +2152,7 @@ export default function App() {
         snapshot,
         activeFilePath,
         activeDocument?.currentContent ?? "",
+        workspaceInstructions,
         chatMessages,
         prompt
       );
@@ -2269,6 +2283,22 @@ export default function App() {
             <div className="insight-card">
               <span className="insight-label">Workspace status</span>
               <strong>{workspaceNotice}</strong>
+            </div>
+            <div className="summary-card">
+              <strong>Workspace instructions</strong>
+              <p>{workspaceInstructionsStatus}</p>
+              {workspaceInstructions ? (
+                <div className="summary-line">
+                  <span>{workspaceInstructions.path}</span>
+                  <button
+                    className="secondary-button slim-button"
+                    onClick={() => void handleSelectFile(workspaceInstructions.path)}
+                    type="button"
+                  >
+                    Open
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="summary-card">
               <strong>Pending actions</strong>

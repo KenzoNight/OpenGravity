@@ -43,6 +43,7 @@ Current shell prototype includes:
 - quick-connect onboarding for API keys and model selection from the main agent dock
 - parallel agent chat lanes across multiple ready accounts and providers
 - structured action blocks from agent responses can now open files, run commands, start the recommended workflow, or apply reviewed exact-match file edits with previews
+- Codex-style workspace instructions from `AGENTS.md` are loaded into the shell and included in chat context
 - OpenAI-compatible chat routing for Gemini, Groq, OpenRouter, OpenAI, and custom endpoints
 - workbench menu actions plus a customize-layout dialog
 - user-defined local skills for launching external tools

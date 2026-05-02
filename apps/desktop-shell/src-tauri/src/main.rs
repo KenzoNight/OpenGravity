@@ -13,6 +13,8 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
 
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+const WORKSPACE_INSTRUCTIONS_FILE: &str = "AGENTS.md";
+const WORKSPACE_INSTRUCTIONS_CHAR_LIMIT: usize = 12_000;
 
 #[derive(Clone, Default)]
 struct CommandRegistry {
@@ -43,6 +45,8 @@ struct WorkspaceSnapshot {
     files: Vec<String>,
     active_file_path: String,
     active_file_content: String,
+    instructions_file_path: String,
+    instructions_content: String,
 }
 
 #[derive(Serialize)]
@@ -123,12 +127,15 @@ fn workspace_snapshot() -> Result<WorkspaceSnapshot, String> {
     } else {
         read_text_file(&resolve_workspace_path(&active_file_path)?)?
     };
+    let (instructions_file_path, instructions_content) = read_workspace_instructions(&root)?;
 
     Ok(WorkspaceSnapshot {
         root_path: root.to_string_lossy().into_owned(),
         files,
         active_file_path,
         active_file_content,
+        instructions_file_path,
+        instructions_content,
     })
 }
 
@@ -243,6 +250,26 @@ fn write_external_file(absolute_path: String, content: String) -> Result<Workspa
         path: normalize_display_path(&resolved),
         content,
     })
+}
+
+fn read_workspace_instructions(root: &Path) -> Result<(String, String), String> {
+    let instructions_path = root.join(WORKSPACE_INSTRUCTIONS_FILE);
+    if !instructions_path.is_file() {
+        return Ok((String::new(), String::new()));
+    }
+
+    let content = read_text_file(&instructions_path)?;
+    let normalized_content = if content.chars().count() <= WORKSPACE_INSTRUCTIONS_CHAR_LIMIT {
+        content
+    } else {
+        let truncated = content
+            .chars()
+            .take(WORKSPACE_INSTRUCTIONS_CHAR_LIMIT)
+            .collect::<String>();
+        format!("{}\n...", truncated.trim_end())
+    };
+
+    Ok((WORKSPACE_INSTRUCTIONS_FILE.into(), normalized_content))
 }
 
 #[tauri::command]
