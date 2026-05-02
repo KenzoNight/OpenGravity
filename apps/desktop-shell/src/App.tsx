@@ -1006,7 +1006,6 @@ export default function App() {
   );
   const recentEvents = snapshot.sessionRecord.events.slice(-6).reverse();
   const recentArtifacts = snapshot.sessionRecord.artifacts.slice(-4).reverse();
-  const runningTask = snapshot.tasks.find((task) => task.status === "running");
   const activeModelLabel = activeLiveModel?.label ?? settings.activeModelId ?? "Setup required";
   const activeChatProfile = activeLiveModel
     ? settings.providerProfiles.find((profile) => profile.provider === activeLiveModel.provider)
@@ -1046,6 +1045,21 @@ export default function App() {
         quickSetupProfile.provider === "openrouter" ||
         quickSetupProfile.provider === "ollama")
   );
+  const quickSetupConnectionState = quickSetupProfile
+    ? getProviderConnectionState(quickSetupProfile, settings)
+    : "setup-required";
+  const quickSetupConnectionLabel = quickSetupProfile
+    ? getProviderConnectionLabel(quickSetupProfile, settings)
+    : "No provider";
+  const needsQuickConnect =
+    !quickSetupProfile || quickSetupConnectionState !== "ready" || !quickSetupAccount?.apiKey.trim();
+  const chatConnectionSummary = needsQuickConnect
+    ? "Paste a provider key to resume this workspace session."
+    : `${chatAccounts.length} ready account${chatAccounts.length === 1 ? "" : "s"} · ${chatProviderLabel}`;
+  const chatExecutionSummary =
+    settings.parallelAgentMode && chatMode === "agent"
+      ? `${settings.concurrentAgentCount} parallel lane${settings.concurrentAgentCount === 1 ? "" : "s"}`
+      : "Single assistant";
   const workspaceInstructions = useMemo(
     () => normalizeWorkspaceInstructions(workspace.instructionsFilePath, workspace.instructionsContent),
     [workspace.instructionsContent, workspace.instructionsFilePath]
@@ -1280,26 +1294,6 @@ export default function App() {
 
             <div className="pane-scroll">
               <section className="section-block">
-                <div className="section-label">Open editors</div>
-                <div className="flat-list">
-                  {editorTabs.map((tabPath) => (
-                    <button
-                      className={`flat-list-row ${tabPath === activeFilePath ? "is-active" : ""}`}
-                      key={tabPath}
-                      onClick={() => void handleSelectFile(tabPath)}
-                      type="button"
-                    >
-                      <span>{labelForFilePath(tabPath)}</span>
-                      {isDocumentDirty(
-                        getWorkspaceDocument(openDocuments, tabPath)?.savedContent ?? "",
-                        getWorkspaceDocument(openDocuments, tabPath)?.currentContent ?? ""
-                      ) ? <span className="dirty-dot" /> : null}
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              <section className="section-block">
                 <div className="section-label">Workspace</div>
                 <div className="explorer-search">
                   <input
@@ -1334,14 +1328,10 @@ export default function App() {
                 ))}
               </section>
 
-              <section className="section-block">
-                <div className="section-label">Context directories</div>
-                {settings.contextDirectories.length === 0 ? (
-                  <div className="settings-empty-state">
-                    Add external context directories in Settings to surface extra files for the agent.
-                  </div>
-                ) : (
-                  filteredContextDirectories.map((entry) => (
+              {settings.contextDirectories.length > 0 ? (
+                <section className="section-block">
+                  <div className="section-label">Context directories</div>
+                  {filteredContextDirectories.map((entry) => (
                     <div className="tree-group" key={entry.directory}>
                       <div className="tree-item is-folder">
                         <span>{entry.rootPath}</span>
@@ -1368,9 +1358,9 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                  ))
-                )}
-              </section>
+                  ))}
+                </section>
+              ) : null}
             </div>
           </>
         );
@@ -3143,49 +3133,13 @@ export default function App() {
 
         <div className="session-path">{activeFilePath ? labelForFilePath(activeFilePath) : workspaceDisplayName}</div>
 
-        <div className="session-pills">
-          <button
-            className={`chrome-toggle ${explorerOpen ? "is-on" : ""}`}
-            onClick={() => setExplorerOpen((value) => !value)}
-            type="button"
-          >
-            Explorer
-          </button>
-          <button
-            className={`chrome-toggle ${primaryView === "source-control" ? "is-on" : ""}`}
-            onClick={() => {
-              setPrimaryView("source-control");
-              setExplorerOpen(true);
-            }}
-            type="button"
-          >
-            Source Control
-          </button>
-          <button
-            className={`chrome-toggle ${bottomOpen ? "is-on" : ""}`}
-            onClick={() => setBottomOpen((value) => !value)}
-            type="button"
-          >
-            Terminal
-          </button>
-          <button
-            className={`chrome-toggle ${dockOpen ? "is-on" : ""}`}
-            onClick={() => setDockOpen((value) => !value)}
-            type="button"
-          >
-            Chat
-          </button>
-          <button
-            className="chrome-toggle"
-            onClick={() => setSettingsOpen(true)}
-            type="button"
-          >
-            Settings
-          </button>
-          <span className={`chrome-pill ${snapshot.setupRequired ? "" : "accent"}`}>
-            {snapshot.setupRequired ? "Provider setup" : "Ready"}
-          </span>
-        </div>
+        {snapshot.setupRequired ? (
+          <div className="topbar-actions">
+            <button className="topbar-cta" onClick={() => setSettingsOpen(true)} type="button">
+              Connect
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className={workbenchClassName}>
@@ -3230,39 +3184,23 @@ export default function App() {
             <div className="editor-toolbar">
               <div className="breadcrumbs">{activeFilePath || "No file selected"}</div>
               <div className="editor-toolbar-right">
-                <span className={`editor-badge ${editorDirty ? "" : "accent"}`}>
-                  {editorDirty ? "Unsaved" : "Saved"}
-                </span>
-                <button className="secondary-button slim-button" onClick={() => void handleReloadFile()} type="button">
-                  Reload
-                </button>
-                <button
-                  className="primary-button slim-button"
-                  disabled={saveBusy || !editorDirty}
-                  onClick={() => void handleSaveFile()}
-                  type="button"
-                >
-                  {saveBusy ? "Saving..." : "Save"}
-                </button>
+                {editorDirty || saveBusy ? (
+                  <>
+                    <span className="editor-badge">{saveBusy ? "Saving..." : "Unsaved"}</span>
+                    <button
+                      className="primary-button slim-button"
+                      disabled={saveBusy || !editorDirty}
+                      onClick={() => void handleSaveFile()}
+                      type="button"
+                    >
+                      {saveBusy ? "Saving..." : "Save"}
+                    </button>
+                  </>
+                ) : null}
               </div>
             </div>
 
             <div className="editor-surface">
-              {snapshot.setupRequired ? (
-                <div className="setup-banner">
-                  <div className="setup-copy">
-                    <strong>Provider setup required</strong>
-                    <p>
-                      OpenGravity already prepared the compile-repair session. Connect a provider or local runtime to
-                      continue the same task with your own credentials.
-                    </p>
-                  </div>
-                  <button className="primary-button" onClick={() => setSettingsOpen(true)} type="button">
-                    Open Provider Settings
-                  </button>
-                </div>
-              ) : null}
-
               <div className="monaco-editor-shell">
                 <Editor
                   beforeMount={configureOpenGravityTheme}
@@ -3283,68 +3221,70 @@ export default function App() {
             </div>
           </section>
 
-          <section className={`bottom-drawer ${bottomOpen ? "is-open" : "is-collapsed"}`}>
-            <div className="bottom-drawer-bar">
-              <div className="drawer-tabs">
-                <button
-                  className={`drawer-tab ${bottomView === "terminal" ? "is-active" : ""}`}
-                  onClick={() => {
-                    setBottomView("terminal");
-                    setBottomOpen(true);
-                  }}
-                  type="button"
-                >
-                  Terminal
-                </button>
-                <button
-                  className={`drawer-tab ${bottomView === "build" ? "is-active" : ""}`}
-                  onClick={() => {
-                    setBottomView("build");
-                    setBottomOpen(true);
-                  }}
-                  type="button"
-                >
-                  Build
-                </button>
-                <button
-                  className={`drawer-tab ${bottomView === "tasks" ? "is-active" : ""}`}
-                  onClick={() => {
-                    setBottomView("tasks");
-                    setBottomOpen(true);
-                  }}
-                  type="button"
-                >
-                  Tasks
-                </button>
-                <button
-                  className={`drawer-tab ${bottomView === "events" ? "is-active" : ""}`}
-                  onClick={() => {
-                    setBottomView("events");
-                    setBottomOpen(true);
-                  }}
-                  type="button"
-                >
-                  Events
-                </button>
-                <button
-                  className={`drawer-tab ${bottomView === "log" ? "is-active" : ""}`}
-                  onClick={() => {
-                    setBottomView("log");
-                    setBottomOpen(true);
-                  }}
-                  type="button"
-                >
-                  Log
+          {bottomOpen ? (
+            <section className="bottom-drawer is-open">
+              <div className="bottom-drawer-bar">
+                <div className="drawer-tabs">
+                  <button
+                    className={`drawer-tab ${bottomView === "terminal" ? "is-active" : ""}`}
+                    onClick={() => {
+                      setBottomView("terminal");
+                      setBottomOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Terminal
+                  </button>
+                  <button
+                    className={`drawer-tab ${bottomView === "build" ? "is-active" : ""}`}
+                    onClick={() => {
+                      setBottomView("build");
+                      setBottomOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Build
+                  </button>
+                  <button
+                    className={`drawer-tab ${bottomView === "tasks" ? "is-active" : ""}`}
+                    onClick={() => {
+                      setBottomView("tasks");
+                      setBottomOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Tasks
+                  </button>
+                  <button
+                    className={`drawer-tab ${bottomView === "events" ? "is-active" : ""}`}
+                    onClick={() => {
+                      setBottomView("events");
+                      setBottomOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Events
+                  </button>
+                  <button
+                    className={`drawer-tab ${bottomView === "log" ? "is-active" : ""}`}
+                    onClick={() => {
+                      setBottomView("log");
+                      setBottomOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Log
+                  </button>
+                </div>
+
+                <button className="drawer-toggle" onClick={() => setBottomOpen(false)} type="button">
+                  Hide panel
                 </button>
               </div>
 
-              <button className="drawer-toggle" onClick={() => setBottomOpen((value) => !value)} type="button">
-                {bottomOpen ? "Hide panel" : "Show panel"}
-              </button>
-            </div>
-
-            {bottomOpen ? <div className="bottom-drawer-panel">{renderBottomContent()}</div> : null}
-          </section>
+              <div className="bottom-drawer-panel">{renderBottomContent()}</div>
+            </section>
+          ) : null}
         </main>
 
         <aside className="pane agent-dock">
@@ -3355,11 +3295,14 @@ export default function App() {
 
           <div className="pane-scroll">
             <section className="section-block">
-              <div className="composer-card">
-                <div className="composer-top">
-                  <strong>OpenGravity Chat</strong>
-                  <span className={`state-pill ${chatBusy ? "is-running" : taskTone(runningTask?.status ?? "queued")}`}>
-                    {chatBusy ? "thinking" : chatMode}
+              <div className="composer-card chat-shell-card">
+                <div className="composer-top chat-shell-header">
+                  <div className="chat-shell-title">
+                    <strong>OpenGravity Chat</strong>
+                    <p className="composer-summary">{getChatModeDescription(chatMode)}</p>
+                  </div>
+                  <span className={`state-pill ${chatBusy ? "is-running" : needsQuickConnect ? "is-waiting" : "is-done"}`}>
+                    {chatBusy ? "Thinking" : needsQuickConnect ? "Setup required" : "Connected"}
                   </span>
                 </div>
 
@@ -3376,238 +3319,248 @@ export default function App() {
                   ))}
                 </div>
 
-                <p className="composer-summary">{getChatModeDescription(chatMode)}</p>
-
-                <div className="chat-toolbar-grid">
-                  <div className="chat-toolbar-field">
-                    <span className="field-label">Provider</span>
-                    <select
-                      className="settings-input chat-compact-input"
-                      onChange={(event) => handleQuickConnectProvider(event.target.value as ModelProvider)}
-                      value={quickSetupProfile?.provider ?? ""}
-                    >
-                      {compatibleChatProfiles.map((profile) => (
-                        <option key={profile.provider} value={profile.provider}>
-                          {profile.label}
-                        </option>
-                      ))}
-                    </select>
+                <div className="dock-summary-row">
+                  <div className="dock-connection-copy">
+                    <strong>{needsQuickConnect ? "Connect a provider" : `${chatProviderLabel} ready`}</strong>
+                    <span>{chatConnectionSummary}</span>
                   </div>
-
-                  <div className="chat-toolbar-field">
-                    <span className="field-label">Model</span>
-                    <select
-                      className="settings-input chat-compact-input"
-                      disabled={!quickSetupProfile || quickSetupModels.length === 0}
-                      onChange={(event) => handleQuickConnectModelChange(event.target.value)}
-                      value={quickSetupProfile?.preferredModelId ?? ""}
-                    >
-                      {quickSetupModels.length === 0 ? <option value="">No models available</option> : null}
-                      {quickSetupModels.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="dock-summary-stack">
+                    {needsQuickConnect ? (
+                      <button className="primary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
+                        Connect
+                      </button>
+                    ) : (
+                      <span className={`state-pill ${quickSetupProfile ? connectionTone(quickSetupProfile, settings) : "is-waiting"}`}>
+                        {quickSetupConnectionLabel}
+                      </span>
+                    )}
+                    <span className="dock-mini-meta">{chatExecutionSummary}</span>
                   </div>
+                </div>
 
-                  <div className="chat-toolbar-field">
-                    <span className="field-label">Account</span>
-                    <div className="chat-toolbar-inline">
+                <details className="dock-disclosure">
+                  <summary className="dock-disclosure-summary">
+                    <div>
+                      <strong>Connection and session controls</strong>
+                      <span>Open this only when you need provider routing, approvals, or multi-agent tuning.</span>
+                    </div>
+                  </summary>
+
+                  <div className="dock-disclosure-body">
+                    <div className="chat-toolbar-grid chat-toolbar-grid-compact">
+                      <div className="chat-toolbar-field">
+                        <span className="field-label">Provider</span>
+                        <select
+                          className="settings-input chat-compact-input"
+                          onChange={(event) => handleQuickConnectProvider(event.target.value as ModelProvider)}
+                          value={quickSetupProfile?.provider ?? ""}
+                        >
+                          {compatibleChatProfiles.map((profile) => (
+                            <option key={profile.provider} value={profile.provider}>
+                              {profile.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="chat-toolbar-field">
+                        <span className="field-label">Model</span>
+                        <select
+                          className="settings-input chat-compact-input"
+                          disabled={!quickSetupProfile || quickSetupModels.length === 0}
+                          onChange={(event) => handleQuickConnectModelChange(event.target.value)}
+                          value={quickSetupProfile?.preferredModelId ?? ""}
+                        >
+                          {quickSetupModels.length === 0 ? <option value="">No models available</option> : null}
+                          {quickSetupModels.map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="chat-toolbar-field">
+                        <span className="field-label">Account</span>
+                        <div className="chat-toolbar-inline">
+                          <select
+                            className="settings-input chat-compact-input"
+                            disabled={!quickSetupProfile || quickSetupAccounts.length === 0}
+                            onChange={(event) => setSelectedAccountId(event.target.value)}
+                            value={quickSetupAccount?.id ?? ""}
+                          >
+                            {quickSetupAccounts.length === 0 ? <option value="">No account</option> : null}
+                            {quickSetupAccounts.map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="secondary-button slim-button"
+                            onClick={() => {
+                              if (!quickSetupProfile) {
+                                return;
+                              }
+
+                              setSettings((current) => addProviderAccount(current, quickSetupProfile.provider));
+                              setWorkspaceNotice(`Added another ${quickSetupProfile.label} account.`);
+                            }}
+                            type="button"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="chat-toolbar-field">
+                        <span className="field-label">Action approvals</span>
+                        <select
+                          className="settings-input chat-compact-input"
+                          onChange={(event) =>
+                            setPermissionSettings((current) => ({
+                              ...current,
+                              profile: event.target.value as PermissionProfile
+                            }))
+                          }
+                          value={permissionSettings.profile}
+                        >
+                          {approvalProfiles.map((profile) => (
+                            <option key={profile} value={profile}>
+                              {getPermissionProfileLabel(profile)}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="field-help approval-help">
+                          {getPermissionProfileDescription(permissionSettings.profile)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="chat-toolbar-actions chat-toolbar-actions-compact">
+                      <label className="toggle-row compact-toggle">
+                        <input
+                          checked={settings.autoHandoff}
+                          onChange={(event) =>
+                            setSettings((current) => ({
+                              ...current,
+                              autoHandoff: event.target.checked
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        <span>Auto handoff</span>
+                      </label>
+
+                      <label className="toggle-row compact-toggle">
+                        <input
+                          checked={settings.parallelAgentMode}
+                          onChange={(event) =>
+                            setSettings((current) => ({
+                              ...current,
+                              parallelAgentMode: event.target.checked
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        <span>Parallel agents</span>
+                      </label>
+
                       <select
-                        className="settings-input chat-compact-input"
-                        disabled={!quickSetupProfile || quickSetupAccounts.length === 0}
-                        onChange={(event) => setSelectedAccountId(event.target.value)}
-                        value={quickSetupAccount?.id ?? ""}
+                        className="settings-input chat-mini-select"
+                        disabled={!settings.parallelAgentMode}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            concurrentAgentCount: Number.parseInt(event.target.value, 10) || 1
+                          }))
+                        }
+                        value={String(settings.concurrentAgentCount)}
                       >
-                        {quickSetupAccounts.length === 0 ? <option value="">No account</option> : null}
-                        {quickSetupAccounts.map((account) => (
-                          <option key={account.id} value={account.id}>
-                            {account.label}
+                        {[1, 2, 3, 4, 5, 6].map((count) => (
+                          <option key={count} value={count}>
+                            {count} lane{count === 1 ? "" : "s"}
                           </option>
                         ))}
                       </select>
-                      <button
-                        className="secondary-button slim-button"
-                        onClick={() => {
-                          if (!quickSetupProfile) {
-                            return;
-                          }
-
-                          setSettings((current) => addProviderAccount(current, quickSetupProfile.provider));
-                          setWorkspaceNotice(`Added another ${quickSetupProfile.label} account.`);
-                        }}
-                        type="button"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="chat-toolbar-field">
-                    <span className="field-label">Action approvals</span>
-                    <select
-                      className="settings-input chat-compact-input"
-                      onChange={(event) =>
-                        setPermissionSettings((current) => ({
-                          ...current,
-                          profile: event.target.value as PermissionProfile
-                        }))
-                      }
-                      value={permissionSettings.profile}
-                    >
-                      {approvalProfiles.map((profile) => (
-                        <option key={profile} value={profile}>
-                          {getPermissionProfileLabel(profile)}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="field-help approval-help">
-                      {getPermissionProfileDescription(permissionSettings.profile)}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="chat-toolbar-actions">
-                  <label className="toggle-row compact-toggle">
-                    <input
-                      checked={settings.autoHandoff}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          autoHandoff: event.target.checked
-                        }))
-                      }
-                      type="checkbox"
-                    />
-                    <span>Auto handoff</span>
-                  </label>
-
-                  <label className="toggle-row compact-toggle">
-                    <input
-                      checked={settings.parallelAgentMode}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          parallelAgentMode: event.target.checked
-                        }))
-                      }
-                      type="checkbox"
-                    />
-                    <span>Parallel agents</span>
-                  </label>
-
-                  <select
-                    className="settings-input chat-mini-select"
-                    disabled={!settings.parallelAgentMode}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        concurrentAgentCount: Number.parseInt(event.target.value, 10) || 1
-                      }))
-                    }
-                    value={String(settings.concurrentAgentCount)}
-                  >
-                    {[1, 2, 3, 4, 5, 6].map((count) => (
-                      <option key={count} value={count}>
-                        {count} lane{count === 1 ? "" : "s"}
-                      </option>
-                    ))}
-                  </select>
-
-                  <button className="secondary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
-                    Settings
-                  </button>
-                  <button className="secondary-button slim-button" onClick={() => handleClearChatHistory()} type="button">
-                    Clear history
-                  </button>
-                  <button
-                    className="secondary-button slim-button"
-                    disabled={rememberedApprovalCount === 0}
-                    onClick={() => {
-                      setPermissionSettings((current) => clearRememberedApprovals(current));
-                      setWorkspaceNotice("Cleared trusted action approvals for this workspace.");
-                    }}
-                    type="button"
-                  >
-                    Clear trusted actions
-                  </button>
-                </div>
-
-                {!quickSetupProfile ||
-                getProviderConnectionState(quickSetupProfile, settings) !== "ready" ||
-                !quickSetupAccount?.apiKey.trim() ? (
-                  <div className="quick-connect-card">
-                    <div className="settings-section-headline">
-                      <div>
-                        <div className="settings-provider-title">Quick Connect</div>
-                        <div className="settings-provider-copy">
-                          Paste a key, pick a model, and OpenGravity will save it locally on this machine.
-                        </div>
-                      </div>
-                      <span className={`state-pill ${quickSetupProfile ? connectionTone(quickSetupProfile, settings) : "is-waiting"}`}>
-                        {quickSetupProfile ? getProviderConnectionLabel(quickSetupProfile, settings) : "No provider"}
-                      </span>
                     </div>
 
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="quick-connect-key">
-                        API key
-                      </label>
-                      <div className="secret-row">
-                        <input
-                          id="quick-connect-key"
-                          className="settings-input"
-                          onChange={(event) => updateQuickConnectAccount({ apiKey: event.target.value, enabled: true })}
-                          placeholder={
-                            quickSetupProfile
-                              ? `Paste the ${quickSetupProfile.label} API key for ${quickSetupAccount?.label ?? "this account"}`
-                              : "Paste an API key"
-                          }
-                          type={visibleSecrets.quickConnect ? "text" : "password"}
-                          value={quickSetupAccount?.apiKey ?? ""}
-                        />
-                        <button
-                          className="secondary-button"
-                          onClick={() =>
-                            setVisibleSecrets((current) => ({
-                              ...current,
-                              quickConnect: !current.quickConnect
-                            }))
-                          }
-                          type="button"
-                        >
-                          {visibleSecrets.quickConnect ? "Hide" : "Show"}
-                        </button>
-                      </div>
-                      <div className="field-help">Saved locally as you type. Nothing is committed to the repository.</div>
-                    </div>
-
-                    {showQuickBaseUrl && quickSetupProfile ? (
+                    <div className="quick-connect-inline">
                       <div className="settings-field">
-                        <label className="field-label" htmlFor="quick-connect-base-url">
-                          Base URL
+                        <label className="field-label" htmlFor="quick-connect-key">
+                          API key
                         </label>
-                        <input
-                          id="quick-connect-base-url"
-                          className="settings-input"
-                          onChange={(event) => updateQuickConnectAccount({ baseUrl: event.target.value })}
-                          placeholder="Enter the endpoint base URL"
-                          value={quickSetupAccount?.baseUrl ?? ""}
-                        />
+                        <div className="secret-row">
+                          <input
+                            id="quick-connect-key"
+                            className="settings-input"
+                            onChange={(event) => updateQuickConnectAccount({ apiKey: event.target.value, enabled: true })}
+                            placeholder={
+                              quickSetupProfile
+                                ? `Paste the ${quickSetupProfile.label} API key for ${quickSetupAccount?.label ?? "this account"}`
+                                : "Paste an API key"
+                            }
+                            type={visibleSecrets.quickConnect ? "text" : "password"}
+                            value={quickSetupAccount?.apiKey ?? ""}
+                          />
+                          <button
+                            className="secondary-button"
+                            onClick={() =>
+                              setVisibleSecrets((current) => ({
+                                ...current,
+                                quickConnect: !current.quickConnect
+                              }))
+                            }
+                            type="button"
+                          >
+                            {visibleSecrets.quickConnect ? "Hide" : "Show"}
+                          </button>
+                        </div>
+                        <div className="field-help">Saved locally on this machine. Nothing is written into the repository.</div>
                       </div>
-                    ) : null}
 
-                    <div className="quick-connect-actions">
-                      <button className="primary-button slim-button" onClick={() => handleQuickConnectReady()} type="button">
-                        Save and connect
-                      </button>
+                      {showQuickBaseUrl && quickSetupProfile ? (
+                        <div className="settings-field">
+                          <label className="field-label" htmlFor="quick-connect-base-url">
+                            Base URL
+                          </label>
+                          <input
+                            id="quick-connect-base-url"
+                            className="settings-input"
+                            onChange={(event) => updateQuickConnectAccount({ baseUrl: event.target.value })}
+                            placeholder="Enter the endpoint base URL"
+                            value={quickSetupAccount?.baseUrl ?? ""}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="chat-toolbar-actions">
+                      {needsQuickConnect ? (
+                        <button className="primary-button slim-button" onClick={() => handleQuickConnectReady()} type="button">
+                          Save and connect
+                        </button>
+                      ) : null}
                       <button className="secondary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
                         Open full settings
                       </button>
+                      <button className="secondary-button slim-button" onClick={() => handleClearChatHistory()} type="button">
+                        Clear history
+                      </button>
+                      <button
+                        className="secondary-button slim-button"
+                        disabled={rememberedApprovalCount === 0}
+                        onClick={() => {
+                          setPermissionSettings((current) => clearRememberedApprovals(current));
+                          setWorkspaceNotice("Cleared trusted action approvals for this workspace.");
+                        }}
+                        type="button"
+                      >
+                        Clear trusted actions
+                      </button>
                     </div>
                   </div>
-                ) : null}
+                </details>
 
                 <div className="chat-history">
                   {chatMessages.map((message) => (
@@ -3622,7 +3575,6 @@ export default function App() {
                         </span>
                         {message.agentRole ? <span>{message.agentRole}</span> : null}
                         {message.accountLabel ? <span>{message.accountLabel}</span> : null}
-                        {message.modelId ? <span>{message.modelId}</span> : null}
                       </div>
                       <div className="chat-message-body">{message.content}</div>
                       {message.actionPlan ? (
@@ -3651,198 +3603,35 @@ export default function App() {
                 <div className="composer-actions">
                   <button
                     className="primary-button slim-button"
-                    disabled={chatBusy || chatInput.trim().length === 0}
+                    disabled={chatBusy || needsQuickConnect || chatInput.trim().length === 0}
                     onClick={() => void handleSendChat()}
                     type="button"
                   >
                     {chatBusy ? "Sending..." : "Send"}
                   </button>
-                  <button
-                    className="secondary-button slim-button"
-                    onClick={() => {
-                      setBottomView("terminal");
-                      setBottomOpen(true);
-                    }}
-                    type="button"
-                  >
-                    Open terminal
-                  </button>
-                  <button
-                    className="secondary-button slim-button"
-                    disabled={
-                      snapshot.setupRequired ||
-                      terminalBusy ||
-                      workflowDispatchBusy ||
-                      !canRunAgentWorkflow(chatMode)
-                    }
-                    onClick={() => handleStartWorkflow()}
-                    type="button"
-                  >
-                    Run suggested plan
-                  </button>
+                  {canRunAgentWorkflow(chatMode) ? (
+                    <button
+                      className="secondary-button slim-button"
+                      disabled={snapshot.setupRequired || terminalBusy || workflowDispatchBusy}
+                      onClick={() => handleStartWorkflow()}
+                      type="button"
+                    >
+                      Run suggested plan
+                    </button>
+                  ) : null}
                 </div>
                 <div className="composer-footer">
                   <span>
-                    {chatAccounts.length > 0
-                      ? `${chatAccounts.length} account${chatAccounts.length === 1 ? "" : "s"} ready`
-                      : "No provider connected"}
+                    {chatHistoryReady ? "History saved for this workspace" : "Preparing workspace history"}
                   </span>
-                  <span>{chatHistoryReady ? "History saved per workspace" : "Preparing chat history"}</span>
                   <span>
                     {settings.parallelAgentMode && chatMode === "agent"
                       ? `${settings.concurrentAgentCount} parallel lane${settings.concurrentAgentCount === 1 ? "" : "s"}`
                       : "Single response mode"}
                   </span>
-                  <span>
-                    {rememberedApprovalCount > 0
-                      ? `${rememberedApprovalCount} trusted action${rememberedApprovalCount === 1 ? "" : "s"}`
-                      : "No trusted actions yet"}
-                  </span>
-                  <span>
-                    {customRuleCount > 0
-                      ? `${customRuleCount} custom rule${customRuleCount === 1 ? "" : "s"}`
-                      : "Profile-only approvals"}
-                  </span>
-                </div>
-
-                <div className="provider-radar-card">
-                  <div className="settings-section-headline">
-                    <div>
-                      <div className="section-label">Provider radar</div>
-                      <div className="settings-provider-copy">
-                        Borrowed from Antigravity-Manager: keep the best ready route, active route, and fallback visible.
-                      </div>
-                    </div>
-                    <button
-                      className="secondary-button slim-button"
-                      disabled={!providerRadar.recommended}
-                      onClick={() => handleUseRecommendedProvider()}
-                      type="button"
-                    >
-                      Use recommended
-                    </button>
-                  </div>
-
-                  <div className="provider-radar-grid">
-                    <div className="summary-card">
-                      <strong>{providerRadar.recommended?.label ?? "No recommended route yet"}</strong>
-                      <p>
-                        {providerRadar.recommended
-                          ? `${providerRadar.recommended.preferredModelLabel} · ${providerRadar.recommended.readyAccountCount} ready account${providerRadar.recommended.readyAccountCount === 1 ? "" : "s"}`
-                          : "Connect a provider account to unlock smart routing recommendations."}
-                      </p>
-                      <span className={`state-pill ${providerRadar.recommended ? permissionDecisionTone("allow") : "is-waiting"}`}>
-                        {providerRadar.recommended?.connectionLabel ?? "setup required"}
-                      </span>
-                    </div>
-
-                    <div className="summary-card">
-                      <strong>{providerRadar.active?.label ?? "No active route"}</strong>
-                      <p>
-                        {providerRadar.active
-                          ? `${providerRadar.active.preferredModelLabel} · ${providerRadar.active.healthReason}`
-                          : "The active route appears after a provider and model are ready."}
-                      </p>
-                      <span className={`state-pill ${providerRadar.active ? permissionDecisionTone("ask") : "is-waiting"}`}>
-                        {providerRadar.active?.healthState ?? "idle"}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="provider-radar-footer">
-                    <span>{`${providerRadar.readyProviderCount} provider${providerRadar.readyProviderCount === 1 ? "" : "s"} ready`}</span>
-                    <span>{`${providerRadar.readyAccountCount} account${providerRadar.readyAccountCount === 1 ? "" : "s"} ready`}</span>
-                    <span>{providerRadar.fallback ? `Fallback: ${providerRadar.fallback.label}` : "No fallback route yet"}</span>
-                  </div>
-                </div>
-
-                <div className="approval-rules-card">
-                  <div className="settings-section-headline">
-                    <div>
-                      <div className="section-label">Approval rules</div>
-                      <div className="settings-provider-copy">
-                        Workspace rules sit above the profile. Use them to always allow, review, or block specific command or workflow patterns.
-                      </div>
-                    </div>
-                    <div className="settings-inline-actions">
-                      <span className={`state-pill ${customRuleCount > 0 ? "is-done" : "is-waiting"}`}>
-                        {customRuleCount} custom
-                      </span>
-                      <button
-                        className="secondary-button slim-button"
-                        disabled={customRuleCount === 0}
-                        onClick={() => {
-                          setPermissionSettings((current) => clearPermissionRules(current));
-                          setWorkspaceNotice("Cleared custom approval rules for this workspace.");
-                        }}
-                        type="button"
-                      >
-                        Clear rules
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="approval-rule-toolbar">
-                    <select
-                      className="settings-input chat-mini-select"
-                      onChange={(event) => setPermissionRuleSubjectDraft(event.target.value as PermissionRuleSubject)}
-                      value={permissionRuleSubjectDraft}
-                    >
-                      <option value="run_command">Command</option>
-                      <option value="run_workflow">Workflow</option>
-                    </select>
-                    <input
-                      className="settings-input approval-rule-pattern"
-                      onChange={(event) => setPermissionRulePatternDraft(event.target.value)}
-                      placeholder={getPermissionRulePatternPlaceholder(permissionRuleSubjectDraft)}
-                      value={permissionRulePatternDraft}
-                    />
-                    <select
-                      className="settings-input chat-mini-select"
-                      onChange={(event) => setPermissionRuleActionDraft(event.target.value as PermissionAction)}
-                      value={permissionRuleActionDraft}
-                    >
-                      <option value="allow">Allow</option>
-                      <option value="ask">Ask</option>
-                      <option value="deny">Deny</option>
-                    </select>
-                    <button className="secondary-button slim-button" onClick={() => handleAddPermissionRule()} type="button">
-                      Add rule
-                    </button>
-                  </div>
-
-                  <div className="approval-rule-examples">
-                    Examples: <code>rg *</code>, <code>cmake *</code>, <code>recommended</code>
-                  </div>
-
-                  {customRuleCount === 0 ? (
-                    <div className="settings-empty-state">
-                      No custom rules yet. The active profile still blocks dangerous commands and auto-runs only what is safe.
-                    </div>
-                  ) : (
-                    <div className="compact-list compact-list-tight">
-                      {permissionSettings.customRules.map((rule) => (
-                        <div className="compact-row" key={rule.id}>
-                          <div className="compact-copy">
-                            <strong>{getPermissionRuleSubjectLabel(rule.subject)}</strong>
-                            <span>{rule.pattern}</span>
-                          </div>
-                          <div className="chat-action-row-right">
-                            <span className={`state-pill ${permissionDecisionTone(rule.action)}`}>
-                              {getPermissionDecisionLabel(rule.action)}
-                            </span>
-                            <button
-                              className="secondary-button slim-button"
-                              onClick={() => handleRemovePermissionRule(rule.id)}
-                              type="button"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {rememberedApprovalCount > 0 ? (
+                    <span>{`${rememberedApprovalCount} trusted action${rememberedApprovalCount === 1 ? "" : "s"}`}</span>
+                  ) : null}
                 </div>
               </div>
             </section>
@@ -3897,7 +3686,160 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="side-panel">{renderSideView()}</div>
+                  <div className="side-panel">
+                    {renderSideView()}
+
+                    <details className="dock-disclosure agent-side-inspector">
+                      <summary className="dock-disclosure-summary">
+                        <div>
+                          <strong>Routing and approvals</strong>
+                          <span>Recommended providers, fallback visibility, and custom command rules stay tucked away here.</span>
+                        </div>
+                      </summary>
+
+                      <div className="dock-disclosure-body agent-side-stack">
+                        <div className="provider-radar-card">
+                          <div className="settings-section-headline">
+                            <div>
+                              <div className="section-label">Provider radar</div>
+                              <div className="settings-provider-copy">
+                                Keep the best ready route, active route, and fallback visible without leaving the session.
+                              </div>
+                            </div>
+                            <button
+                              className="secondary-button slim-button"
+                              disabled={!providerRadar.recommended}
+                              onClick={() => handleUseRecommendedProvider()}
+                              type="button"
+                            >
+                              Use recommended
+                            </button>
+                          </div>
+
+                          <div className="provider-radar-grid">
+                            <div className="summary-card">
+                              <strong>{providerRadar.recommended?.label ?? "No recommended route yet"}</strong>
+                              <p>
+                                {providerRadar.recommended
+                                  ? `${providerRadar.recommended.preferredModelLabel} · ${providerRadar.recommended.readyAccountCount} ready account${providerRadar.recommended.readyAccountCount === 1 ? "" : "s"}`
+                                  : "Connect a provider account to unlock smart routing recommendations."}
+                              </p>
+                              <span className={`state-pill ${providerRadar.recommended ? permissionDecisionTone("allow") : "is-waiting"}`}>
+                                {providerRadar.recommended?.connectionLabel ?? "setup required"}
+                              </span>
+                            </div>
+
+                            <div className="summary-card">
+                              <strong>{providerRadar.active?.label ?? "No active route"}</strong>
+                              <p>
+                                {providerRadar.active
+                                  ? `${providerRadar.active.preferredModelLabel} · ${providerRadar.active.healthReason}`
+                                  : "The active route appears after a provider and model are ready."}
+                              </p>
+                              <span className={`state-pill ${providerRadar.active ? permissionDecisionTone("ask") : "is-waiting"}`}>
+                                {providerRadar.active?.healthState ?? "idle"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="provider-radar-footer">
+                            <span>{`${providerRadar.readyProviderCount} provider${providerRadar.readyProviderCount === 1 ? "" : "s"} ready`}</span>
+                            <span>{`${providerRadar.readyAccountCount} account${providerRadar.readyAccountCount === 1 ? "" : "s"} ready`}</span>
+                            <span>{providerRadar.fallback ? `Fallback: ${providerRadar.fallback.label}` : "No fallback route yet"}</span>
+                          </div>
+                        </div>
+
+                        <div className="approval-rules-card">
+                          <div className="settings-section-headline">
+                            <div>
+                              <div className="section-label">Approval rules</div>
+                              <div className="settings-provider-copy">
+                                Workspace rules sit above the profile. Use them to always allow, review, or block specific command or workflow patterns.
+                              </div>
+                            </div>
+                            <div className="settings-inline-actions">
+                              <span className={`state-pill ${customRuleCount > 0 ? "is-done" : "is-waiting"}`}>
+                                {customRuleCount} custom
+                              </span>
+                              <button
+                                className="secondary-button slim-button"
+                                disabled={customRuleCount === 0}
+                                onClick={() => {
+                                  setPermissionSettings((current) => clearPermissionRules(current));
+                                  setWorkspaceNotice("Cleared custom approval rules for this workspace.");
+                                }}
+                                type="button"
+                              >
+                                Clear rules
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="approval-rule-toolbar">
+                            <select
+                              className="settings-input chat-mini-select"
+                              onChange={(event) => setPermissionRuleSubjectDraft(event.target.value as PermissionRuleSubject)}
+                              value={permissionRuleSubjectDraft}
+                            >
+                              <option value="run_command">Command</option>
+                              <option value="run_workflow">Workflow</option>
+                            </select>
+                            <input
+                              className="settings-input approval-rule-pattern"
+                              onChange={(event) => setPermissionRulePatternDraft(event.target.value)}
+                              placeholder={getPermissionRulePatternPlaceholder(permissionRuleSubjectDraft)}
+                              value={permissionRulePatternDraft}
+                            />
+                            <select
+                              className="settings-input chat-mini-select"
+                              onChange={(event) => setPermissionRuleActionDraft(event.target.value as PermissionAction)}
+                              value={permissionRuleActionDraft}
+                            >
+                              <option value="allow">Allow</option>
+                              <option value="ask">Ask</option>
+                              <option value="deny">Deny</option>
+                            </select>
+                            <button className="secondary-button slim-button" onClick={() => handleAddPermissionRule()} type="button">
+                              Add rule
+                            </button>
+                          </div>
+
+                          <div className="approval-rule-examples">
+                            Examples: <code>rg *</code>, <code>cmake *</code>, <code>recommended</code>
+                          </div>
+
+                          {customRuleCount === 0 ? (
+                            <div className="settings-empty-state">
+                              No custom rules yet. The active profile still blocks dangerous commands and auto-runs only what is safe.
+                            </div>
+                          ) : (
+                            <div className="compact-list compact-list-tight">
+                              {permissionSettings.customRules.map((rule) => (
+                                <div className="compact-row" key={rule.id}>
+                                  <div className="compact-copy">
+                                    <strong>{getPermissionRuleSubjectLabel(rule.subject)}</strong>
+                                    <span>{rule.pattern}</span>
+                                  </div>
+                                  <div className="chat-action-row-right">
+                                    <span className={`state-pill ${permissionDecisionTone(rule.action)}`}>
+                                      {getPermissionDecisionLabel(rule.action)}
+                                    </span>
+                                    <button
+                                      className="secondary-button slim-button"
+                                      onClick={() => handleRemovePermissionRule(rule.id)}
+                                      type="button"
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </details>
+                  </div>
                 </>
               ) : null}
             </section>
