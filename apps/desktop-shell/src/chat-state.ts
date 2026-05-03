@@ -31,8 +31,6 @@ export const chatHistoryStorageNamespace = "opengravity.chat-history.v1";
 
 const validChatModes = new Set<ChatMode>(["ask", "planning", "agent"]);
 const validChatRoles = new Set<ChatMessageRole>(["user", "assistant", "system"]);
-const defaultChatReadyMessage =
-  "OpenGravity chat is ready. Connect a provider, choose a mode, and start with Ask, Planning, or Agent.";
 
 let nextMessageId = Date.now();
 
@@ -89,7 +87,7 @@ export function createChatMessage(
 }
 
 export function createInitialChatMessages(): ChatMessage[] {
-  return [createChatMessage("system", defaultChatReadyMessage)];
+  return [];
 }
 
 export function createDefaultChatSession(): PersistedChatSession {

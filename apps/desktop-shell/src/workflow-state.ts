@@ -6,7 +6,7 @@ import type {
 import type { WorkspaceCommandEventPayload, WorkspaceCommandResult } from "./native-bridge";
 
 export type WorkflowItemStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
-export type WorkflowRunStatus = "running" | "completed" | "failed" | "cancelled";
+export type WorkflowRunStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
 
 export interface WorkflowItem {
   id: string;
@@ -46,7 +46,10 @@ function cancelQueuedWorkflowItems(items: WorkflowItem[]): WorkflowItem[] {
   );
 }
 
-export function createWorkflowRun(plan: WorkspaceExecutionPlan): WorkflowRun {
+export function createWorkflowRun(
+  plan: WorkspaceExecutionPlan,
+  initialStatus: WorkflowRunStatus = "idle"
+): WorkflowRun {
   const items = plan.steps.flatMap((step, stepIndex) =>
     step.commands.map((command, commandIndex) => ({
       id: `wf-item-${stepIndex}-${commandIndex}`,
@@ -59,7 +62,7 @@ export function createWorkflowRun(plan: WorkspaceExecutionPlan): WorkflowRun {
 
   return {
     id: `wf-${nextWorkflowId++}`,
-    status: "running",
+    status: initialStatus,
     currentRunId: null,
     items
   };

@@ -72,7 +72,7 @@ describe("chat-state", () => {
       JSON.parse(serializePersistedChatSession(normalized)).messages[1]?.accountLabel,
       "Gemini Default"
     );
-    assert.equal(createDefaultChatSession().messages.length, 1);
+    assert.equal(createDefaultChatSession().messages.length, 0);
   });
 
   it("teaches agent mode how to emit structured ui actions", () => {

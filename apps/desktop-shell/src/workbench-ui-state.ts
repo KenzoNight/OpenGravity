@@ -19,7 +19,7 @@ export interface WorkbenchUiState {
   statusBarOpen: boolean;
 }
 
-export const workbenchUiStorageKey = "opengravity.workbench-ui.v3";
+export const workbenchUiStorageKey = "opengravity.workbench-ui.v6";
 
 const validPrimaryViews = new Set<WorkbenchPrimaryView>([
   "source-control",

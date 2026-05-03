@@ -1,5 +1,10 @@
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
+import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
+import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
+import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
+import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
 import type {
@@ -78,7 +83,6 @@ import {
   createChatMessage,
   getChatHistoryStorageKey,
   getChatComposerPlaceholder,
-  getChatModeDescription,
   normalizePersistedChatSession,
   serializePersistedChatSession,
   type ChatMessage,
@@ -198,6 +202,30 @@ import "./styles.css";
 
 loader.config({ monaco });
 
+(globalThis as typeof globalThis & {
+  MonacoEnvironment?: { getWorker: (_moduleId: string, label: string) => Worker };
+}).MonacoEnvironment = {
+  getWorker(_moduleId: string, label: string) {
+    if (label === "json") {
+      return new jsonWorker();
+    }
+
+    if (label === "css" || label === "scss" || label === "less") {
+      return new cssWorker();
+    }
+
+    if (label === "html" || label === "handlebars" || label === "razor") {
+      return new htmlWorker();
+    }
+
+    if (label === "typescript" || label === "javascript") {
+      return new tsWorker();
+    }
+
+    return new editorWorker();
+  }
+};
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -222,13 +250,13 @@ const menuItems: Array<{ id: MenuId; label: string }> = [
   { id: "help", label: "Help" }
 ];
 
-const activityItems: Array<{ id: WorkbenchPrimaryView; shortLabel: string; label: string }> = [
-  { id: "source-control", shortLabel: "SC", label: "Source Control" },
-  { id: "explorer", shortLabel: "EX", label: "Explorer" },
-  { id: "agents", shortLabel: "AG", label: "Agents" },
-  { id: "workflows", shortLabel: "WF", label: "Workflows" },
-  { id: "artifacts", shortLabel: "AR", label: "Artifacts" },
-  { id: "search", shortLabel: "SR", label: "Search" }
+const activityItems: Array<{ id: WorkbenchPrimaryView; label: string }> = [
+  { id: "source-control", label: "Source Control" },
+  { id: "explorer", label: "Explorer" },
+  { id: "agents", label: "Agents" },
+  { id: "workflows", label: "Workflows" },
+  { id: "artifacts", label: "Artifacts" },
+  { id: "search", label: "Search" }
 ];
 
 const approvalProfiles = permissionProfiles;
@@ -1020,6 +1048,10 @@ export default function App() {
         ? selectedChatProfile
         : fallbackChatProfile;
   const chatAccounts = chatProfile ? getReadyProviderAccounts(settings, chatProfile.provider) : [];
+  const visibleChatMessages = useMemo(
+    () => chatMessages.filter((message) => message.role !== "system"),
+    [chatMessages]
+  );
   const chatModelId =
     chatProfile && activeLiveModel && chatProfile.provider === activeLiveModel.provider
       ? activeLiveModel.id
@@ -1294,7 +1326,10 @@ export default function App() {
 
             <div className="pane-scroll">
               <section className="section-block">
-                <div className="section-label">Workspace</div>
+                <div className="explorer-root-label">
+                  <span>{workspaceDisplayName}</span>
+                  <small>{workspace.rootPath}</small>
+                </div>
                 <div className="explorer-search">
                   <input
                     className="explorer-search-input"
@@ -1303,7 +1338,6 @@ export default function App() {
                     value={explorerQuery}
                   />
                 </div>
-                <div className="tree-root">{workspace.rootPath}</div>
                 {explorerGroups.map((group) => (
                   <div className="tree-group" key={group.label}>
                     <div className={`tree-item ${group.label === "root" ? "is-root-group" : "is-folder"}`}>
@@ -1840,7 +1874,7 @@ export default function App() {
 
     setBottomView("build");
     setBottomOpen(true);
-    setWorkflowRun(createWorkflowRun(snapshot.executionPlan));
+    setWorkflowRun(createWorkflowRun(snapshot.executionPlan, "running"));
     setWorkspaceNotice("Queued the recommended workflow.");
   };
 
@@ -2884,10 +2918,12 @@ export default function App() {
                           ? "is-failed"
                           : workflowRun?.status === "cancelled"
                             ? "is-blocked"
-                            : "is-running"
+                            : workflowRun?.status === "running"
+                              ? "is-running"
+                              : "is-waiting"
                     }`}
                   >
-                    {workflowRun?.status ?? "running"}
+                    {workflowRun?.status ?? "idle"}
                   </span>
                 </div>
                 <div className="workflow-summary-copy">
@@ -3156,7 +3192,7 @@ export default function App() {
                 type="button"
                 title={item.label}
               >
-                <span>{item.shortLabel}</span>
+                <span className={`activity-icon activity-icon-${item.id}`} aria-hidden="true" />
               </button>
             ))}
           </aside>
@@ -3288,80 +3324,151 @@ export default function App() {
         </main>
 
         <aside className="pane agent-dock">
-          <div className="pane-header">
-            <span>Agent</span>
-            <span className="pane-meta">Focused assistant</span>
+          <div className="pane-header agent-dock-header">
+            <span>{chatMode === "agent" ? "Agent" : chatMode === "planning" ? "Planning" : "Ask"}</span>
+            <button
+              className={`dock-header-button ${agentDetailsOpen ? "is-active" : ""}`}
+              onClick={() => setAgentDetailsOpen((value) => !value)}
+              type="button"
+            >
+              Details
+            </button>
           </div>
 
-          <div className="pane-scroll">
-            <section className="section-block">
+          <div className="pane-scroll agent-dock-body">
+            <section className="section-block agent-chat-section">
               <div className="composer-card chat-shell-card">
                 <div className="composer-top chat-shell-header">
                   <div className="chat-shell-title">
-                    <strong>OpenGravity Chat</strong>
-                    <p className="composer-summary">{getChatModeDescription(chatMode)}</p>
+                    <strong>OpenGravity</strong>
                   </div>
                   <span className={`state-pill ${chatBusy ? "is-running" : needsQuickConnect ? "is-waiting" : "is-done"}`}>
-                    {chatBusy ? "Thinking" : needsQuickConnect ? "Setup required" : "Connected"}
+                    {chatBusy ? "Thinking" : needsQuickConnect ? "Connect" : "Ready"}
                   </span>
                 </div>
 
-                <div className="chat-mode-tabs">
-                  {(["ask", "planning", "agent"] as ChatMode[]).map((mode) => (
-                    <button
-                      className={`chat-mode-tab ${chatMode === mode ? "is-active" : ""}`}
-                      key={mode}
-                      onClick={() => setChatMode(mode)}
-                      type="button"
-                    >
-                      {mode === "ask" ? "Ask" : mode === "planning" ? "Planning" : "Agent"}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="dock-summary-row">
-                  <div className="dock-connection-copy">
-                    <strong>{needsQuickConnect ? "Connect a provider" : `${chatProviderLabel} ready`}</strong>
-                    <span>{chatConnectionSummary}</span>
-                  </div>
-                  <div className="dock-summary-stack">
-                    {needsQuickConnect ? (
-                      <button className="primary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
-                        Connect
-                      </button>
-                    ) : (
-                      <span className={`state-pill ${quickSetupProfile ? connectionTone(quickSetupProfile, settings) : "is-waiting"}`}>
-                        {quickSetupConnectionLabel}
-                      </span>
-                    )}
-                    <span className="dock-mini-meta">{chatExecutionSummary}</span>
-                  </div>
-                </div>
-
-                <details className="dock-disclosure">
-                  <summary className="dock-disclosure-summary">
-                    <div>
-                      <strong>Connection and session controls</strong>
-                      <span>Open this only when you need provider routing, approvals, or multi-agent tuning.</span>
-                    </div>
-                  </summary>
-
-                  <div className="dock-disclosure-body">
-                    <div className="chat-toolbar-grid chat-toolbar-grid-compact">
-                      <div className="chat-toolbar-field">
-                        <span className="field-label">Provider</span>
-                        <select
-                          className="settings-input chat-compact-input"
-                          onChange={(event) => handleQuickConnectProvider(event.target.value as ModelProvider)}
-                          value={quickSetupProfile?.provider ?? ""}
-                        >
-                          {compatibleChatProfiles.map((profile) => (
-                            <option key={profile.provider} value={profile.provider}>
-                              {profile.label}
-                            </option>
-                          ))}
-                        </select>
+                {needsQuickConnect ? (
+                  <div className="quick-connect-panel">
+                    <div className="quick-connect-panel-head">
+                      <div>
+                        <strong>Connect a provider</strong>
+                        <span>{chatConnectionSummary}</span>
                       </div>
+                      <button className="secondary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
+                        Settings
+                      </button>
+                    </div>
+
+                    <div className="quick-connect-grid">
+                      <select
+                        className="settings-input chat-compact-input"
+                        onChange={(event) => handleQuickConnectProvider(event.target.value as ModelProvider)}
+                        value={quickSetupProfile?.provider ?? ""}
+                      >
+                        {compatibleChatProfiles.map((profile) => (
+                          <option key={profile.provider} value={profile.provider}>
+                            {profile.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        className="settings-input chat-compact-input"
+                        disabled={!quickSetupProfile || quickSetupModels.length === 0}
+                        onChange={(event) => handleQuickConnectModelChange(event.target.value)}
+                        value={quickSetupProfile?.preferredModelId ?? ""}
+                      >
+                        {quickSetupModels.length === 0 ? <option value="">No models available</option> : null}
+                        {quickSetupModels.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="secret-row quick-connect-secret">
+                      <input
+                        className="settings-input"
+                        onChange={(event) => updateQuickConnectAccount({ apiKey: event.target.value, enabled: true })}
+                        placeholder={
+                          quickSetupProfile
+                            ? `Paste the ${quickSetupProfile.label} API key`
+                            : "Paste an API key"
+                        }
+                        type={visibleSecrets.quickConnect ? "text" : "password"}
+                        value={quickSetupAccount?.apiKey ?? ""}
+                      />
+                      <button
+                        className="secondary-button"
+                        onClick={() =>
+                          setVisibleSecrets((current) => ({
+                            ...current,
+                            quickConnect: !current.quickConnect
+                          }))
+                        }
+                        type="button"
+                      >
+                        {visibleSecrets.quickConnect ? "Hide" : "Show"}
+                      </button>
+                    </div>
+
+                    {showQuickBaseUrl && quickSetupProfile ? (
+                      <input
+                        className="settings-input"
+                        onChange={(event) => updateQuickConnectAccount({ baseUrl: event.target.value })}
+                        placeholder="Endpoint base URL"
+                        value={quickSetupAccount?.baseUrl ?? ""}
+                      />
+                    ) : null}
+
+                    <div className="quick-connect-actions">
+                      <button className="primary-button slim-button" onClick={() => handleQuickConnectReady()} type="button">
+                        Save and connect
+                      </button>
+                      <button
+                        className="secondary-button slim-button"
+                        onClick={() => {
+                          if (!quickSetupProfile) {
+                            return;
+                          }
+
+                          setSettings((current) => addProviderAccount(current, quickSetupProfile.provider));
+                          setWorkspaceNotice(`Added another ${quickSetupProfile.label} account.`);
+                        }}
+                        type="button"
+                      >
+                        Add account
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {agentDetailsOpen ? (
+                  <details className="dock-disclosure">
+                    <summary className="dock-disclosure-summary">
+                      <div>
+                        <strong>Controls</strong>
+                        <span>{`${chatProviderLabel} | ${chatExecutionSummary} | ${quickSetupConnectionLabel}`}</span>
+                      </div>
+                    </summary>
+
+                    <div className="dock-disclosure-body">
+                      <div className="chat-toolbar-grid chat-toolbar-grid-compact">
+                        <div className="chat-toolbar-field">
+                          <span className="field-label">Provider</span>
+                          <select
+                            className="settings-input chat-compact-input"
+                            onChange={(event) => handleQuickConnectProvider(event.target.value as ModelProvider)}
+                            value={quickSetupProfile?.provider ?? ""}
+                          >
+                            {compatibleChatProfiles.map((profile) => (
+                              <option key={profile.provider} value={profile.provider}>
+                                {profile.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
 
                       <div className="chat-toolbar-field">
                         <span className="field-label">Model</span>
@@ -3535,35 +3642,36 @@ export default function App() {
                       ) : null}
                     </div>
 
-                    <div className="chat-toolbar-actions">
-                      {needsQuickConnect ? (
-                        <button className="primary-button slim-button" onClick={() => handleQuickConnectReady()} type="button">
-                          Save and connect
+                      <div className="chat-toolbar-actions">
+                        {needsQuickConnect ? (
+                          <button className="primary-button slim-button" onClick={() => handleQuickConnectReady()} type="button">
+                            Save and connect
+                          </button>
+                        ) : null}
+                        <button className="secondary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
+                          Open full settings
                         </button>
-                      ) : null}
-                      <button className="secondary-button slim-button" onClick={() => setSettingsOpen(true)} type="button">
-                        Open full settings
-                      </button>
-                      <button className="secondary-button slim-button" onClick={() => handleClearChatHistory()} type="button">
-                        Clear history
-                      </button>
-                      <button
-                        className="secondary-button slim-button"
-                        disabled={rememberedApprovalCount === 0}
-                        onClick={() => {
-                          setPermissionSettings((current) => clearRememberedApprovals(current));
-                          setWorkspaceNotice("Cleared trusted action approvals for this workspace.");
-                        }}
-                        type="button"
-                      >
-                        Clear trusted actions
-                      </button>
+                        <button className="secondary-button slim-button" onClick={() => handleClearChatHistory()} type="button">
+                          Clear history
+                        </button>
+                        <button
+                          className="secondary-button slim-button"
+                          disabled={rememberedApprovalCount === 0}
+                          onClick={() => {
+                            setPermissionSettings((current) => clearRememberedApprovals(current));
+                            setWorkspaceNotice("Cleared trusted action approvals for this workspace.");
+                          }}
+                          type="button"
+                        >
+                          Clear trusted actions
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                </details>
+                  </details>
+                ) : null}
 
                 <div className="chat-history">
-                  {chatMessages.map((message) => (
+                  {visibleChatMessages.map((message) => (
                     <div className={`chat-message is-${message.role}`} key={message.id}>
                       <div className="chat-message-meta">
                         <strong>{message.role === "user" ? "You" : message.role === "assistant" ? "OpenGravity" : "System"}</strong>
@@ -3599,6 +3707,19 @@ export default function App() {
                   placeholder={getChatComposerPlaceholder(chatMode)}
                   value={chatInput}
                 />
+
+                <div className="chat-mode-tabs composer-mode-tabs">
+                  {(["ask", "planning", "agent"] as ChatMode[]).map((mode) => (
+                    <button
+                      className={`chat-mode-tab ${chatMode === mode ? "is-active" : ""}`}
+                      key={mode}
+                      onClick={() => setChatMode(mode)}
+                      type="button"
+                    >
+                      {mode === "ask" ? "Ask" : mode === "planning" ? "Planning" : "Agent"}
+                    </button>
+                  ))}
+                </div>
 
                 <div className="composer-actions">
                   <button
@@ -3636,24 +3757,17 @@ export default function App() {
               </div>
             </section>
 
-            <section className="section-block">
-              <div className="settings-section-headline">
-                <div>
-                  <div className="section-label">Session details</div>
-                  <div className="settings-provider-copy">
-                    Keep the chat focused. Expand this only when you need runtime context.
+            {agentDetailsOpen ? (
+              <section className="section-block agent-details-section">
+                <div className="settings-section-headline">
+                  <div>
+                    <div className="section-label">Session details</div>
+                    <div className="settings-provider-copy">
+                      Runtime context for the current workspace.
+                    </div>
                   </div>
                 </div>
-                <button
-                  className="secondary-button slim-button"
-                  onClick={() => setAgentDetailsOpen((value) => !value)}
-                  type="button"
-                >
-                  {agentDetailsOpen ? "Hide" : "Show"}
-                </button>
-              </div>
 
-              {agentDetailsOpen ? (
                 <>
                   <div className="side-tabs">
                     <button
@@ -3841,8 +3955,8 @@ export default function App() {
                     </details>
                   </div>
                 </>
-              ) : null}
-            </section>
+              </section>
+            ) : null}
           </div>
         </aside>
       </div>
@@ -3921,7 +4035,7 @@ export default function App() {
                     setActivityBarOpen(true);
                     setExplorerOpen(true);
                     setDockOpen(true);
-                    setBottomOpen(true);
+                    setBottomOpen(false);
                     setStatusBarOpen(true);
                   }}
                   type="button"

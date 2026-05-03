@@ -29,12 +29,12 @@ describe("workflow-state", () => {
     const run = createWorkflowRun(samplePlan);
 
     assert.equal(run.items.length, 2);
-    assert.equal(run.status, "running");
+    assert.equal(run.status, "idle");
     assert.equal(getNextQueuedWorkflowItem(run)?.command, "cmake -S . -B build");
   });
 
   it("tracks completion and failure from command results", () => {
-    const created = createWorkflowRun(samplePlan);
+    const created = createWorkflowRun(samplePlan, "running");
     const running = markWorkflowItemRunning(created, created.items[0]!.id, "cmd-1");
     const completed = applyWorkflowCommandResult(running, created.items[0]!.id, {
       command: "cmake -S . -B build",
@@ -61,7 +61,7 @@ describe("workflow-state", () => {
   });
 
   it("applies event-driven completion and cancellation", () => {
-    const created = createWorkflowRun(samplePlan);
+    const created = createWorkflowRun(samplePlan, "running");
     const running = markWorkflowItemRunning(created, created.items[0]!.id, "cmd-1");
     const completed = applyWorkflowEvent(running, {
       runId: "cmd-1",
