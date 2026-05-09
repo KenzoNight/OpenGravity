@@ -1,0 +1,190 @@
+{
+  "name": "opengravity-agent",
+  "displayName": "OpenGravity Agent",
+  "description": "First-party OpenGravity agent dock with BYOK account setup, workspace chat state, and mode safety gates.",
+  "version": "0.1.0",
+  "publisher": "opengravity",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "activationEvents": [
+    "onView:opengravity.agent",
+    "onCommand:opengravity.openAgent",
+    "onCommand:opengravity.connectProvider",
+    "onCommand:opengravity.switchAccount",
+    "onCommand:opengravity.removeAccount",
+    "onCommand:opengravity.runPlan",
+    "onCommand:opengravity.clearHistory"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "OpenGravity",
+      "properties": {
+        "opengravity.defaultProvider": {
+          "type": "string",
+          "default": "gemini",
+          "enum": [
+            "gemini",
+            "openrouter",
+            "groq",
+            "deepseek",
+            "openai-compatible",
+            "anthropic",
+            "ollama",
+            "custom"
+          ],
+          "description": "Default provider used by the OpenGravity agent. API keys are stored in SecretStorage, not settings."
+        },
+        "opengravity.defaultModel": {
+          "type": "string",
+          "default": "gemini-2.5-pro",
+          "description": "Default model label for the active OpenGravity provider account."
+        },
+        "opengravity.approvalProfile": {
+          "type": "string",
+          "default": "balanced",
+          "enum": [
+            "cautious",
+            "balanced",
+            "auto-safe"
+          ],
+          "description": "Controls how much review OpenGravity requires before Agent mode applies edits or runs commands."
+        },
+        "opengravity.agent.mode": {
+          "type": "string",
+          "default": "ask",
+          "enum": [
+            "ask",
+            "planning",
+            "agent"
+          ],
+          "description": "Current agent mode. Ask answers only, Planning plans only, and Agent requires explicit approval for mutations."
+        },
+        "opengravity.providers.customBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Optional OpenAI-compatible base URL for custom provider accounts."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "opengravity.openAgent",
+        "title": "Open Agent",
+        "category": "OpenGravity"
+      },
+      {
+        "command": "opengravity.connectProvider",
+        "title": "Connect Provider",
+        "category": "OpenGravity"
+      },
+      {
+        "command": "opengravity.switchAccount",
+        "title": "Switch Provider Account",
+        "category": "OpenGravity"
+      },
+      {
+        "command": "opengravity.removeAccount",
+        "title": "Remove Provider Account",
+        "category": "OpenGravity"
+      },
+      {
+        "command": "opengravity.runPlan",
+        "title": "Run Approved Plan",
+        "category": "OpenGravity"
+      },
+      {
+        "command": "opengravity.clearHistory",
+        "title": "Clear Chat History",
+        "category": "OpenGravity"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "opengravity.openAgent"
+        },
+        {
+          "command": "opengravity.connectProvider"
+        },
+        {
+          "command": "opengravity.switchAccount"
+        },
+        {
+          "command": "opengravity.removeAccount"
+        },
+        {
+          "command": "opengravity.runPlan"
+        },
+        {
+          "command": "opengravity.clearHistory"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "opengravity.connectProvider",
+          "group": "navigation@1",
+          "when": "view == opengravity.agent"
+        },
+        {
+          "command": "opengravity.clearHistory",
+          "group": "navigation@2",
+          "when": "view == opengravity.agent"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "opengravity.agent.container",
+          "title": "Agent",
+          "icon": "media/agent.svg"
+        }
+      ]
+    },
+    "views": {
+      "opengravity.agent.container": [
+        {
+          "id": "opengravity.agent",
+          "name": "OpenGravity"
+        }
+      ]
+    },
+    "configurationDefaults": {
+      "workbench.startupEditor": "none",
+      "workbench.colorTheme": "OpenGravity Dark",
+      "workbench.preferredDarkColorTheme": "OpenGravity Dark",
+      "window.commandCenter": false,
+      "workbench.layoutControl.enabled": false,
+      "workbench.activityBar.location": "top",
+      "workbench.activityBar.compact": true,
+      "workbench.secondarySideBar.defaultVisibility": "visibleInWorkspace",
+      "workbench.secondarySideBar.showLabels": false,
+      "workbench.tips.enabled": false,
+      "chat.agentsControl.enabled": "hidden",
+      "chat.unifiedAgentsBar.enabled": false
+    },
+    "themes": [
+      {
+        "id": "opengravity-dark",
+        "label": "OpenGravity Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/opengravity-dark-color-theme.json"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node ./test/modeSafety.test.js && node ./test/providerCatalog.test.js && node ./test/providerRuntime.test.js"
+  }
+}
